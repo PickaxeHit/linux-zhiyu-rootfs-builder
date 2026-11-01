@@ -32,6 +32,12 @@ on:
 
 env:
   TARBALL_URL: http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+  # Pinned qcom-va-driver: the VA-API backend for Qualcomm Iris, installed as
+  # /usr/lib/dri/qcom_drv_video.so together with the msm and v4l2 aliases.  It
+  # is built as a package in the bootstrap (that is aarch64 already), so the
+  # target only has to install a .pkg.tar.zst, exactly like qbootctl.
+  VA_DRIVER_URL: https://github.com/radxa-pkg/qcom-va-driver/archive/0980a1decf26d34c9aa71cd0a4a0d25703a7a17f.tar.gz
+  VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
 
 jobs:
   build:
@@ -75,6 +81,14 @@ jobs:
           T="$PWD/target"      # the new system, installed with pacstrap
           mkdir -p "$B" "$T"
 
+          # The target directory has to be root owned before anything runs inside
+          # it.  It used to be created by the runner (uid 1001), and both the
+          # pacman scriptlets in arch-chroot and systemd-tmpfiles at boot refuse
+          # to work under a non-root owned "/" ("Detected unsafe path transition
+          # / (owned by 1001) -> /etc"), which is why the packed image ended up
+          # with / owned by 1001, /tmp/.X11-unix never created and no Xwayland.
+          sudo chown root:root "$B" "$T"
+
           # ---- 1. bootstrap environment from the official tarball ----
           F="$(basename "$TARBALL_URL")"
           curl -fL --retry 3 -O "$TARBALL_URL"
@@ -107,46 +121,91 @@ jobs:
           bc pacman-key --init
           bc pacman-key --populate archlinuxarm
           bc pacman -Syu --noconfirm
-          bc pacman -S --needed --noconfirm arch-install-scripts base-devel git
+          bc pacman -S --needed --noconfirm arch-install-scripts base-devel git meson ninja pkgconf
 
           # zstd packages for makepkg (bootstrap side)
           bc sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" /etc/makepkg.conf
 
-          # ---- 1b. build qbootctl (AUR) inside the bootstrap, output a .pkg.tar.zst ----
+          # ---- 1b. build qbootctl (AUR) inside the bootstrap ----
           bc useradd -m builder
           echo 'builder ALL=(ALL) NOPASSWD: ALL' | sudo tee "$B/etc/sudoers.d/99-builder" >/dev/null
           sudo chmod 440 "$B/etc/sudoers.d/99-builder"
           bc install -d -o builder -g builder /var/tmp/pkgs
           bc runuser -u builder -- env PKGDEST=/var/tmp/pkgs bash -c \
             'cd ~ && git clone --depth 1 https://aur.archlinux.org/qbootctl.git && cd qbootctl && makepkg -sA --noconfirm'
+
+          # ---- 1c. build qcom-va-driver inside the bootstrap ----
+          # The plain upstream build (gpu_copy=auto, no CDSP/Vulkan VPP
+          # skeletons), which is what the board actually runs.
+          sudo mkdir -p "$B/var/tmp/va-pkg"
+          sudo tee "$B/var/tmp/va-pkg/PKGBUILD" >/dev/null <<EOF
+          pkgname=qcom-va-driver
+          pkgver=1.1.1
+          pkgrel=1
+          pkgdesc='VA-API backend for Qualcomm Iris stateful V4L2 M2M decoding and H.264/HEVC encoding'
+          arch=('aarch64')
+          url='https://github.com/radxa-pkg/qcom-va-driver'
+          license=('MIT')
+          depends=('glibc' 'gcc-libs' 'libva' 'libdrm' 'mesa' 'libglvnd')
+          makedepends=('meson' 'ninja' 'pkgconf')
+          options=('!strip')
+          source=("$VA_DRIVER_URL")
+          sha256sums=('SKIP')
+
+          build() {
+            # Same configuration the board runs: GPU copy for surface
+            # conversions, no CDSP/Vulkan video processing (those need ghc and
+            # Vulkan headers, and VA-API decode/encode does not use them).
+            meson setup build "\$srcdir/$VA_DRIVER_SRC" \\
+              --buildtype=release --prefix=/usr --libdir=lib \\
+              -Dgpu_copy=auto -Dcdsp_vpp=disabled -Dvulkan_vpp=disabled
+            meson compile -C build
+          }
+
+          package() {
+            DESTDIR="\$pkgdir" meson install -C build --no-rebuild
+            install -d "\$pkgdir/usr/share/doc/\$pkgname"
+            cp -a "\$srcdir/$VA_DRIVER_SRC/patches" "\$pkgdir/usr/share/doc/\$pkgname/"
+          }
+          EOF
+          sudo chown -R builder:builder "$B/var/tmp/va-pkg"
+          bc runuser -u builder -- env PKGDEST=/var/tmp/pkgs bash -c \
+            'cd /var/tmp/va-pkg && makepkg -sA --noconfirm'
           bc bash -c 'ls -l /var/tmp/pkgs/*.pkg.tar.zst'
 
-          # ---- 2. pacstrap the new system ----
-          PKGS=(base base-devel archlinuxarm-keyring
-                pipewire-audio pipewire-alsa pipewire-pulse wireplumber alsa-utils
-                man-db man-pages texinfo
+          # ---- 2. pacstrap: only the base system ----
+          # Everything above "base" (desktop, audio, fonts, NetworkManager) is
+          # installed in the chroot below, where the package scriptlets run
+          # against a root owned target and systemd tooling works.
+          PKGS=(base base-devel archlinuxarm-keyring git bash zsh openssh vim)
+
+          bc pacstrap -K /mnt/target "${PKGS[@]}"
+
+          # ---- 3. application layer, inside the new system ----
+          APPS=(pipewire-audio pipewire-alsa pipewire-pulse wireplumber alsa-utils
+                libva mesa
                 networkmanager bluez bluez-utils
-                vi vim git openssh zsh
                 noto-fonts noto-fonts-cjk noto-fonts-emoji
-                tesseract-data-eng tesseract-data-chi_sim)
-          [ "$FIRMWARE" = "true" ] && PKGS+=(linux-firmware)
+                tesseract-data-eng tesseract-data-chi_sim
+                man-db man-pages texinfo)
+          [ "$FIRMWARE" = "true" ] && APPS+=(linux-firmware)
 
           case "$DESKTOP" in
             kde)
-              PKGS+=(plasma-meta
+              APPS+=(plasma-meta
                      kde-accessibility-meta kde-graphics-meta kde-multimedia-meta
                      kde-network-meta kde-system-meta kde-utilities-meta)
               DM=plasmalogin ;;
             gnome)
-              PKGS+=(gnome)
+              APPS+=(gnome)
               DM=gdm ;;
             none)
               DM= ;;
             *) echo "bad desktop"; exit 1 ;;
           esac
-          bc pacstrap -K /mnt/target "${PKGS[@]}"
+          c pacman -S --needed --noconfirm "${APPS[@]}"
 
-          # ---- 3. configure ----
+          # ---- 4. configure ----
           # locale
           sudo sed -i -E 's/^#(en_US\.UTF-8 UTF-8|zh_CN\.UTF-8 UTF-8)/\1/' "$T/etc/locale.gen"
           c locale-gen
@@ -184,19 +243,36 @@ jobs:
           sudo mkdir -p "$T/usr/share/alsa/ucm2"
           sudo cp -a --no-preserve=ownership "$U/." "$T/usr/share/alsa/ucm2/"
 
-          # install the qbootctl package built in the bootstrap
+          # install the packages built in the bootstrap
           bc bash -c 'cp /var/tmp/pkgs/*.pkg.tar.zst /mnt/target/var/tmp/'
           if c pacman -V | grep -qE 'Pacman v([7-9]|[1-9][0-9])\.'; then
             sudo sed -i '/^\[options\]/a DisableSandbox' "$T/etc/pacman.conf"
           fi
           c bash -c 'pacman -U --noconfirm /var/tmp/qbootctl-*.pkg.tar.zst'
+          c bash -c 'pacman -U --noconfirm /var/tmp/qcom-va-driver-*.pkg.tar.zst'
           sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
           sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
           c test -x /usr/bin/qbootctl
+          c test -f /usr/lib/dri/qcom_drv_video.so
 
           # makepkg defaults to zstd in the new system
           sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
           grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
+
+          # ---- 5. state the login manager expects ----
+          # plasmalogin's account uses /var/lib/plasmalogin as its home, but no
+          # package creates that directory; without it the greeter exits right
+          # after start ("chdir(/var/lib/plasmalogin) failed",
+          # PLASMALOGIN::Auth::HELPER_OTHER_ERROR) and the desktop never comes
+          # up even though graphical.target is reached.
+          if c getent passwd plasmalogin >/dev/null; then
+            uid=$(c id -u plasmalogin)
+            gid=$(c id -g plasmalogin)
+            sudo install -d -m 700 -o "$uid" -g "$gid" "$T/var/lib/plasmalogin"
+          fi
+          # Create /tmp/.X11-unix and friends now that "/" is root owned, so the
+          # image is complete even before tmpfiles runs at boot.
+          c systemd-tmpfiles --create --boot --exclude-prefix=/dev || true
 
           # default boot target
           c systemctl set-default graphical.target
@@ -217,15 +293,22 @@ jobs:
           EOF
           c systemctl enable qbootctl-mark-success.service
 
-          # verify what we promised
+          # ---- 6. verify what we promised ----
           c pacman -Qq | grep -E '^linux($|-)' || echo "no linux* packages installed"
           c systemctl is-enabled NetworkManager bluetooth qbootctl-mark-success ${DM:+$DM}
           find "$T/usr/lib/firmware" -type f | wc -l
           find "$U" -type f | wc -l
           c getent group wheel
           c systemctl get-default
+          echo "--- packages that matter:"
+          c pacman -Qq qbootctl qcom-va-driver
+          ls -l "$T/usr/lib/dri/" | grep -E 'qcom|msm|v4l2'
+          echo "--- ownership and login manager state:"
+          stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
+          ls -ld "$T/var/lib/plasmalogin" 2>/dev/null || echo "plasmalogin home MISSING"
+          ls -ld "$T/tmp/.X11-unix" 2>/dev/null || echo "no /tmp/.X11-unix"
 
-          # ---- 4. cleanup ----
+          # ---- 7. cleanup ----
           c gpgconf --homedir /etc/pacman.d/gnupg --kill all || true
           sudo rm -rf "$T"/var/cache/pacman/pkg/* "$T"/var/log/pacman.log
           sudo rm -f "$T/etc/resolv.conf"
@@ -241,6 +324,9 @@ jobs:
           DESKTOP: ${{ inputs.desktop }}
         run: |
           OUT="alarm-aarch64-${DESKTOP}-rootfs.tar.zst"
+          # The top level "." entry must be root owned in the archive too: a
+          # non-root owned "/" makes systemd-tmpfiles abort at boot.
+          sudo chown root:root target
           sudo tar --numeric-owner --xattrs --acls -C target \
             -I 'zstd -T0 -19' -cpf "$OUT" .
           sudo chown "$USER" "$OUT"
