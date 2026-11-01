@@ -261,15 +261,25 @@ jobs:
           grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
 
           # ---- 5. state the login manager expects ----
-          # plasmalogin's account uses /var/lib/plasmalogin as its home, but no
-          # package creates that directory; without it the greeter exits right
-          # after start ("chdir(/var/lib/plasmalogin) failed",
-          # PLASMALOGIN::Auth::HELPER_OTHER_ERROR) and the desktop never comes
-          # up even though graphical.target is reached.
+          # plasma-login-manager ships /usr/lib/sysusers.d/plasmalogin.conf,
+          # whose home is /var/lib/plasmalogin, and systemd-sysusers creates
+          # that directory through the pacman hook that runs when the package
+          # is installed.  That hook used to fail because the target was owned
+          # by the runner, and the greeter then exited right after start
+          # ("chdir(/var/lib/plasmalogin) failed",
+          # PLASMALOGIN::Auth::HELPER_OTHER_ERROR) while graphical.target was
+          # reached.  With a root owned target the hook does the job, so only
+          # report it - and fall back to creating the directory by hand if the
+          # hook ever stops working.
           if c getent passwd plasmalogin >/dev/null; then
-            uid=$(c id -u plasmalogin)
-            gid=$(c id -g plasmalogin)
-            sudo install -d -m 700 -o "$uid" -g "$gid" "$T/var/lib/plasmalogin"
+            if [ -d "$T/var/lib/plasmalogin" ]; then
+              echo "plasmalogin home: $(stat -c '%U:%G %a' "$T/var/lib/plasmalogin") (created by systemd-sysusers)"
+            else
+              echo "::warning::systemd-sysusers did not create /var/lib/plasmalogin, creating it here"
+              uid=$(c id -u plasmalogin)
+              gid=$(c id -g plasmalogin)
+              sudo install -d -m 750 -o "$uid" -g "$gid" "$T/var/lib/plasmalogin"
+            fi
           fi
           # Create /tmp/.X11-unix and friends now that "/" is root owned, so the
           # image is complete even before tmpfiles runs at boot.
