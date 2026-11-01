@@ -1,0 +1,184 @@
+name: Build ALARM rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      desktop:
+        description: Desktop environment
+        type: choice
+        options: [kde, gnome, none]
+        default: kde
+      username:
+        description: Initial username
+        type: string
+        default: user
+      password:
+        description: Initial password (overridden by repo secret ROOTFS_PASSWORD if set)
+        type: string
+        default: changeme
+      shell:
+        description: Login shell of the initial user
+        type: choice
+        options: [zsh, bash]
+        default: zsh
+      hostname:
+        description: Hostname
+        type: string
+        default: alarm
+      firmware:
+        description: Explicitly install linux-firmware
+        type: boolean
+        default: false
+
+env:
+  TARBALL_URL: http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Free disk space and install host tools
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/hostedtoolcache /usr/local/lib/android || true
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools zstd
+          df -h /
+
+      - name: Build rootfs
+        env:
+          DESKTOP: ${{ inputs.desktop }}
+          USERNAME: ${{ inputs.username }}
+          PASSWORD: ${{ secrets.ROOTFS_PASSWORD || inputs.password }}
+          LOGIN_SHELL: ${{ inputs.shell }}
+          HOST_NAME: ${{ inputs.hostname }}
+          FIRMWARE: ${{ inputs.firmware }}
+        run: |
+          set -eo pipefail
+          echo "::add-mask::$PASSWORD"
+
+          [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "invalid username"; exit 1; }
+          [[ "$HOST_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || { echo "invalid hostname"; exit 1; }
+
+          B="$PWD/bootstrap"   # temporary "live CD" made from the ALARM tarball
+          T="$PWD/target"      # the new system, installed with pacstrap
+          mkdir -p "$B" "$T"
+
+          # ---- 1. bootstrap environment from the official tarball ----
+          F="$(basename "$TARBALL_URL")"
+          curl -fL --retry 3 -O "$TARBALL_URL"
+          curl -fL --retry 3 -O "$TARBALL_URL.md5"
+          md5sum -c "$F.md5"
+          sudo bsdtar -xpf "$F" -C "$B" --numeric-owner
+          rm -f "$F" "$F.md5"
+
+          cleanup() { sudo umount -R "$B" 2>/dev/null || sudo umount -Rl "$B" || true; }
+          trap cleanup EXIT
+          sudo mkdir -p "$B/mnt/target"
+          sudo mount --bind "$B" "$B"
+          sudo mount -t proc proc "$B/proc"
+          sudo mount --rbind /sys "$B/sys" && sudo mount --make-rslave "$B/sys"
+          sudo mount --rbind /dev "$B/dev" && sudo mount --make-rslave "$B/dev"
+          sudo mount -t tmpfs tmpfs "$B/run"
+          sudo mount -t tmpfs tmpfs "$B/tmp"
+          sudo mount --bind "$T" "$B/mnt/target"     # pacstrap needs a mountpoint
+          sudo rm -f "$B/etc/resolv.conf"
+          sudo cp -L /etc/resolv.conf "$B/etc/resolv.conf"
+
+          bc() { sudo chroot "$B" /usr/bin/env -i HOME=/root TERM=dumb \
+                   PATH=/usr/local/bin:/usr/bin LANG=C "$@"; }
+          c()  { bc arch-chroot /mnt/target "$@"; }   # run inside the new system
+
+          bc sed -i 's/^CheckSpace/#CheckSpace/' /etc/pacman.conf
+          if bc pacman -V | grep -qE 'Pacman v([7-9]|[1-9][0-9])\.'; then
+            bc sed -i '/^\[options\]/a DisableSandbox' /etc/pacman.conf
+          fi
+          bc pacman-key --init
+          bc pacman-key --populate archlinuxarm
+          bc pacman -Syu --noconfirm
+          bc pacman -S --needed --noconfirm arch-install-scripts
+
+          # ---- 2. pacstrap the new system ----
+          PKGS=(base base-devel archlinuxarm-keyring
+                pipewire-audio pipewire-alsa pipewire-pulse wireplumber alsa-utils
+                man-db man-pages texinfo
+                networkmanager bluez bluez-utils
+                vi vim git openssh zsh
+                noto-fonts noto-fonts-cjk noto-fonts-emoji)
+          [ "$FIRMWARE" = "true" ] && PKGS+=(linux-firmware)
+
+          case "$DESKTOP" in
+            kde)
+              PKGS+=(plasma-meta
+                     kde-accessibility-meta kde-graphics-meta kde-multimedia-meta
+                     kde-network-meta kde-system-meta kde-utilities-meta)
+              DM=plasmalogin ;;
+            gnome)
+              PKGS+=(gnome)
+              DM=gdm ;;
+            none)
+              DM= ;;
+            *) echo "bad desktop"; exit 1 ;;
+          esac
+          bc pacstrap -K /mnt/target "${PKGS[@]}"
+
+          # ---- 3. configure ----
+          # locale
+          sudo sed -i -E 's/^#(en_US\.UTF-8 UTF-8|zh_CN\.UTF-8 UTF-8)/\1/' "$T/etc/locale.gen"
+          c locale-gen
+          echo 'LANG=zh_CN.UTF-8' | sudo tee "$T/etc/locale.conf" >/dev/null
+
+          # hostname
+          echo "$HOST_NAME" | sudo tee "$T/etc/hostname" >/dev/null
+
+          # users
+          c useradd -m -G wheel -s "/usr/bin/$LOGIN_SHELL" "$USERNAME"
+          printf '%s:%s\n' "$USERNAME" "$PASSWORD" | c chpasswd
+          c passwd -l root
+          echo '%wheel ALL=(ALL:ALL) ALL' | sudo tee "$T/etc/sudoers.d/10-wheel" >/dev/null
+          sudo chmod 440 "$T/etc/sudoers.d/10-wheel"
+          if [ "$LOGIN_SHELL" = zsh ]; then
+            sudo touch "$T/home/$USERNAME/.zshrc"
+            c chown "$USERNAME:$USERNAME" "/home/$USERNAME/.zshrc"
+          fi
+
+          # services
+          c systemctl enable NetworkManager bluetooth
+          [ -z "$DM" ] || c systemctl enable "$DM"
+          c systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
+
+          # verify what we promised
+          c pacman -Qq | grep -E '^linux($|-)' || echo "no linux* packages installed"
+          c systemctl is-enabled NetworkManager bluetooth ${DM:+$DM}
+          c getent group wheel
+
+          # ---- 4. cleanup ----
+          c gpgconf --homedir /etc/pacman.d/gnupg --kill all || true
+          sudo rm -rf "$T"/var/cache/pacman/pkg/* "$T"/var/log/pacman.log
+          sudo rm -f "$T/etc/resolv.conf"
+          : | sudo tee "$T/etc/machine-id" >/dev/null
+          sudo find "$T/etc/pacman.d/gnupg" -name 'S.*' -delete 2>/dev/null || true
+          cleanup
+          trap - EXIT
+
+          du -sh "$T"
+
+      - name: Pack
+        env:
+          DESKTOP: ${{ inputs.desktop }}
+        run: |
+          OUT="alarm-aarch64-${DESKTOP}-rootfs.tar.zst"
+          sudo tar --numeric-owner --xattrs --acls -C target \
+            -I 'zstd -T0 -19' -cpf "$OUT" .
+          sudo chown "$USER" "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          ls -lh "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alarm-aarch64-${{ inputs.desktop }}-rootfs
+          path: |
+            alarm-aarch64-*-rootfs.tar.zst
+            alarm-aarch64-*-rootfs.tar.zst.sha256
+          compression-level: 0
+          retention-days: 7
