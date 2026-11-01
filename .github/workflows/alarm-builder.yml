@@ -60,6 +60,7 @@ jobs:
           lfs: true
           sparse-checkout: |
             initramfs-src/blobs/firmware
+            initramfs-src/tplg/sm8750-tplg.bin
             scripts/alsa-ucm2
 
       - name: Build rootfs
@@ -236,6 +237,13 @@ jobs:
           [ -d "$Z/initramfs-src/blobs/firmware" ] || { echo "firmware dir missing"; exit 1; }
           sudo mkdir -p "$T/usr/lib/firmware"
           sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/firmware/." "$T/usr/lib/firmware/"
+          # The AudioReach topology is built by linux-zhiyu (initramfs-src/tplg)
+          # and committed there; the card loads it from the rootfs after
+          # switch_root.  Without this the image only gets playback: no
+          # MultiMedia3 capture PCM, so UCM has no HiFi profile and PipeWire
+          # falls back to Pro Audio (no stereo sink, no microphone).
+          sudo install -Dm644 "$Z/initramfs-src/tplg/sm8750-tplg.bin" \
+            "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
 
           # ALSA UCM overlay from linux-zhiyu (merged into /usr/share/alsa/ucm2)
           U="$Z/scripts/alsa-ucm2"
