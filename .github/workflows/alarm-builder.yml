@@ -168,7 +168,8 @@ jobs:
             cp -a "\$srcdir/$VA_DRIVER_SRC/patches" "\$pkgdir/usr/share/doc/\$pkgname/"
           }
           EOF
-          sudo chown -R builder:builder "$B/var/tmp/va-pkg"
+          # "builder" only exists inside the bootstrap, so the chown has to run there.
+          bc chown -R builder:builder /var/tmp/va-pkg
           bc runuser -u builder -- env PKGDEST=/var/tmp/pkgs bash -c \
             'cd /var/tmp/va-pkg && makepkg -sA --noconfirm'
           bc bash -c 'ls -l /var/tmp/pkgs/*.pkg.tar.zst'
