@@ -45,6 +45,17 @@ jobs:
           sudo apt-get install -y libarchive-tools zstd
           df -h /
 
+      - name: Checkout linux-zhiyu (firmware + alsa-ucm2)
+        uses: actions/checkout@v4
+        with:
+          repository: PickaxeHit/linux-zhiyu
+          path: zhiyu
+          token: ${{ secrets.ZHIYU_TOKEN || github.token }}
+          lfs: true
+          sparse-checkout: |
+            initramfs-src/blobs/firmware
+            scripts/alsa-ucm2
+
       - name: Build rootfs
         env:
           DESKTOP: ${{ inputs.desktop }}
@@ -96,7 +107,19 @@ jobs:
           bc pacman-key --init
           bc pacman-key --populate archlinuxarm
           bc pacman -Syu --noconfirm
-          bc pacman -S --needed --noconfirm arch-install-scripts
+          bc pacman -S --needed --noconfirm arch-install-scripts base-devel git
+
+          # zstd packages for makepkg (bootstrap side)
+          bc sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" /etc/makepkg.conf
+
+          # ---- 1b. build qbootctl (AUR) inside the bootstrap, output a .pkg.tar.zst ----
+          bc useradd -m builder
+          echo 'builder ALL=(ALL) NOPASSWD: ALL' | sudo tee "$B/etc/sudoers.d/99-builder" >/dev/null
+          sudo chmod 440 "$B/etc/sudoers.d/99-builder"
+          bc install -d -o builder -g builder /var/tmp/pkgs
+          bc runuser -u builder -- env PKGDEST=/var/tmp/pkgs bash -c \
+            'cd ~ && git clone --depth 1 https://aur.archlinux.org/qbootctl.git && cd qbootctl && makepkg -sA --noconfirm'
+          bc bash -c 'ls -l /var/tmp/pkgs/*.pkg.tar.zst'
 
           # ---- 2. pacstrap the new system ----
           PKGS=(base base-devel archlinuxarm-keyring
@@ -148,10 +171,59 @@ jobs:
           [ -z "$DM" ] || c systemctl enable "$DM"
           c systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 
+          # firmware blobs from linux-zhiyu
+          Z="$PWD/zhiyu"
+          [ -d "$Z/initramfs-src/blobs/firmware" ] || { echo "firmware dir missing"; exit 1; }
+          sudo mkdir -p "$T/usr/lib/firmware"
+          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/firmware/." "$T/usr/lib/firmware/"
+
+          # ALSA UCM overlay from linux-zhiyu (merged into /usr/share/alsa/ucm2)
+          U="$Z/scripts/alsa-ucm2"
+          [ -d "$U" ] || { echo "alsa-ucm2 dir missing"; exit 1; }
+          [ -d "$U/ucm2" ] && U="$U/ucm2"
+          sudo mkdir -p "$T/usr/share/alsa/ucm2"
+          sudo cp -a --no-preserve=ownership "$U/." "$T/usr/share/alsa/ucm2/"
+
+          # install the qbootctl package built in the bootstrap
+          bc bash -c 'cp /var/tmp/pkgs/*.pkg.tar.zst /mnt/target/var/tmp/'
+          if c pacman -V | grep -qE 'Pacman v([7-9]|[1-9][0-9])\.'; then
+            sudo sed -i '/^\[options\]/a DisableSandbox' "$T/etc/pacman.conf"
+          fi
+          c bash -c 'pacman -U --noconfirm /var/tmp/qbootctl-*.pkg.tar.zst'
+          sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
+          sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
+          c test -x /usr/bin/qbootctl
+
+          # makepkg defaults to zstd in the new system
+          sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
+          grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
+
+          # default boot target
+          c systemctl set-default graphical.target
+
+          # mark the booted slot successful on every boot
+          sudo tee "$T/etc/systemd/system/qbootctl-mark-success.service" >/dev/null <<'EOF'
+          [Unit]
+          Description=Mark current boot slot as successful (qbootctl -m)
+          After=local-fs.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/qbootctl -m
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          c systemctl enable qbootctl-mark-success.service
+
           # verify what we promised
           c pacman -Qq | grep -E '^linux($|-)' || echo "no linux* packages installed"
-          c systemctl is-enabled NetworkManager bluetooth ${DM:+$DM}
+          c systemctl is-enabled NetworkManager bluetooth qbootctl-mark-success ${DM:+$DM}
+          find "$T/usr/lib/firmware" -type f | wc -l
+          find "$U" -type f | wc -l
           c getent group wheel
+          c systemctl get-default
 
           # ---- 4. cleanup ----
           c gpgconf --homedir /etc/pacman.d/gnupg --kill all || true
