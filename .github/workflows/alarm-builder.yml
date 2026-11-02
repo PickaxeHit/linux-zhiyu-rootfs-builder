@@ -66,9 +66,9 @@ jobs:
           token: ${{ secrets.ZHIYU_TOKEN || github.token }}
           lfs: true
           sparse-checkout: |
-            initramfs-src/blobs/firmware
-            initramfs-src/tplg/sm8750-tplg.bin
             scripts/alsa-ucm2
+            scripts/90-dma-heap.rules
+            scripts/91-flash-led.rules
 
       - name: Build rootfs
         env:
@@ -373,9 +373,10 @@ jobs:
           # out ("Could not open any dma-buf provider"), so every GStreamer /
           # QtMultimedia camera client fails while libcamera's raw capture
           # still works.
-          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-dma-heap.rules" >/dev/null <<'EOF'
-          SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"
-          EOF
+          # dma-buf heap for libcamera's software ISP, and the torch LED
+          # permissions; both live in linux-zhiyu/scripts.
+          sudo install -Dm644 "$Z/scripts/90-dma-heap.rules" "$T/etc/udev/rules.d/90-dma-heap.rules"
+          sudo install -Dm644 "$Z/scripts/91-flash-led.rules" "$T/etc/udev/rules.d/91-flash-led.rules"
           c systemctl is-enabled systemd-resolved
 
           # makepkg defaults to zstd in the new system
