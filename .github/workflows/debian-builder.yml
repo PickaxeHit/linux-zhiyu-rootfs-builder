@@ -75,6 +75,7 @@ jobs:
             scripts/alsa-ucm2
             scripts/90-dma-heap.rules
             scripts/91-flash-led.rules
+            scripts/60-persistent-v4l.rules
 
       - name: Build rootfs
         env:
@@ -398,6 +399,9 @@ jobs:
           # permissions; both live in linux-zhiyu/scripts.
           sudo install -Dm644 "$Z/scripts/90-dma-heap.rules" "$T/etc/udev/rules.d/90-dma-heap.rules"
           sudo install -Dm644 "$Z/scripts/91-flash-led.rules" "$T/etc/udev/rules.d/91-flash-led.rules"
+          # Stop v4l_id from opening the focus lens at boot/resume: opening a
+          # v4l-subdev powers the VCM up and moves the lens.
+          sudo install -Dm644 "$Z/scripts/60-persistent-v4l.rules" "$T/etc/udev/rules.d/60-persistent-v4l.rules"
           ch systemctl is-enabled systemd-resolved
 
           # ---- 8. cleanup ----
