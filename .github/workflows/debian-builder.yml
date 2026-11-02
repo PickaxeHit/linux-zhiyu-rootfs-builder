@@ -125,7 +125,7 @@ jobs:
 
           # ---- 3. application layer ----
           APPS="qbootctl
-                wireless-regdb wpa_supplicant iw rfkill
+                wireless-regdb wpasupplicant iw rfkill
                 pipewire pipewire-pulse wireplumber alsa-utils
                 libva2 libva-drm2 libdrm2 libgbm1
                 network-manager bluetooth bluez
