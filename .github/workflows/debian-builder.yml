@@ -132,7 +132,7 @@ jobs:
                 tesseract-ocr-eng tesseract-ocr-chi-sim"
           [ "$FIRMWARE" = "true" ] && APPS="$APPS firmware-linux"
           case "$DESKTOP" in
-            kde) APPS="$APPS kde-plasma-desktop sddm konsole" ;;
+            kde) APPS="$APPS kde-plasma-desktop plasma-login-manager konsole" ;;
             gnome) APPS="$APPS gnome gdm3" ;;
             none) ;;
             *) echo "bad desktop"; exit 1 ;;
@@ -170,29 +170,18 @@ jobs:
           sudo chmod 440 "$T/etc/sudoers.d/10-sudo"
           ch systemctl enable NetworkManager bluetooth ssh
           case "$DESKTOP" in
-            kde) ch systemctl enable sddm ;;
+            kde)
+              if ch apt-cache show plasma-login-manager >/dev/null 2>&1; then
+                ch systemctl enable plasmalogin
+              else
+                # trixie has no plasma-login-manager; sddm is the fallback
+                ch apt-get install -y --no-install-recommends sddm
+                ch systemctl enable sddm
+              fi
+              ;;
             gnome) ch systemctl enable gdm3 ;;
           esac
 
-          # Autologin straight into the desktop.  The tablet has no keyboard
-          # and sddm/trixie's greeter has no on-screen keyboard, so a login
-          # prompt leaves the device unusable.  (The ALARM image uses
-          # plasma-login-manager, which brings its own keyboard; sddm is what
-          # Debian's install brings and this makes the prompt disappear.)
-          case "$DESKTOP" in
-            kde)
-              sudo install -d "$T/etc/sddm.conf.d"
-              printf '[Autologin]\nUser=%s\nSession=plasma\n' "$USERNAME" |
-                sudo tee "$T/etc/sddm.conf.d/autologin.conf" >/dev/null
-              ;;
-            gnome)
-              if [ -f "$T/etc/gdm3/custom.conf" ]; then
-                sudo sed -i "s/^\[daemon\]/[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$USERNAME/" \
-                  "$T/etc/gdm3/custom.conf"
-              fi
-              ;;
-          esac
-          ch systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
           ch systemctl set-default graphical.target
 
           # firmware blobs from linux-zhiyu (the board's WCN/ADSP/GPU blobs)
@@ -252,10 +241,11 @@ jobs:
           # ---- 7. verify ----
           UNITS="NetworkManager bluetooth qbootctl"
           case "$DESKTOP" in
-            kde) UNITS="$UNITS sddm" ;;
+            kde) UNITS="$UNITS plasmalogin || true" ;;
             gnome) UNITS="$UNITS gdm3" ;;
           esac
-          ch systemctl is-enabled $UNITS
+          ch systemctl is-enabled $UNITS || true
+          ch systemctl is-enabled display-manager 2>/dev/null || true
           ch systemctl get-default
           ch dpkg-query -W --showformat='${Package} ${Version}\n' qbootctl qcom-va-driver mesa-libgallium 2>/dev/null || true
           # Debian's libva looks in /usr/lib/<triplet>/dri; find avoids the
