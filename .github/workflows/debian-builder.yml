@@ -132,10 +132,11 @@ jobs:
             passwd pciutils usbutils iproute2 iputils-ping rfkill
 
           # ---- 3. application layer ----
+          # mesa-vulkan-drivers carries freedreno's Turnip and mesa-opencl-icd
+          # rusticl: without them vulkaninfo has no ICD and clinfo no platform.
           APPS="qbootctl
                 wireless-regdb wpasupplicant iw rfkill alsa-ucm-conf
                 vainfo systemd-timesyncd xz-utils
-                # freedreno Vulkan (Turnip) and rusticl OpenCL for the Adreno
                 mesa-vulkan-drivers mesa-opencl-icd clinfo
                 pipewire pipewire-pulse wireplumber alsa-utils
                 libva2 libva-drm2 libdrm2 libgbm1

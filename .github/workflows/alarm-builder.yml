@@ -262,10 +262,10 @@ jobs:
           c test -f /usr/lib/dri/qcom_drv_video.so
 
           # ---- 3. application layer, inside the new system ----
+          # vulkan-freedreno is Turnip and opencl-mesa is rusticl: without
+          # them vulkaninfo finds no ICD and clinfo no platform.
           APPS=(pipewire-audio pipewire-alsa pipewire-pulse wireplumber alsa-utils
                 alsa-ucm-conf libva mesa libva-utils
-                # Turnip (Adreno 830) for Vulkan and rusticl for OpenCL:
-                # without them vulkaninfo finds no ICD and clinfo no platform.
                 vulkan-freedreno opencl-mesa vulkan-tools clinfo
                 networkmanager bluez bluez-utils
                 noto-fonts noto-fonts-cjk noto-fonts-emoji
