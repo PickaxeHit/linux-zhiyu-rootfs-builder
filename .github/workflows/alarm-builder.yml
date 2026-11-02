@@ -341,7 +341,7 @@ jobs:
           # Sensor registry / config served to the ADSP (from the stock vendor
           # image, see initramfs-src/blobs/sensors).
           sudo install -d "$T/usr/share/qcom/sensors/registry"
-          sudo cp -a "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
+          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
           sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
           sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
           c test -x /usr/bin/qbootctl

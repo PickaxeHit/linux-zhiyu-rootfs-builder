@@ -336,7 +336,7 @@ jobs:
           KERNEL=="fastrpc-*", SUBSYSTEM=="misc", GROUP="fastrpc", MODE="0660"
           EOF
           sudo install -d "$T/usr/share/qcom/sensors/registry"
-          sudo cp -a "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
+          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
 
           # ---- 6. boot slot marking ----
           # Debian's qbootctl package ships qbootctl.service, which runs
