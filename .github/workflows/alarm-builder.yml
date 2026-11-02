@@ -344,7 +344,8 @@ jobs:
           done
           # --ask=4 lets pacman drop the distribution libcamera-ipa/-tools,
           # which our libcamera replaces.
-          c pacman -U --noconfirm --ask=4 /var/tmp/rel/*.pkg.tar.zst
+          # The glob has to be expanded inside the chroot, not on the runner.
+          c bash -c 'pacman -U --noconfirm --ask=4 /var/tmp/rel/*.pkg.tar.zst'
           sudo rm -rf "$T/var/tmp/rel"
           c systemctl enable zhiyu-sensord
 

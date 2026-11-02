@@ -260,7 +260,7 @@ jobs:
           done
           # dpkg replaces the distribution libcamera packages (Declared as
           # Replaces/Breaks in ours).
-          ch dpkg -i /var/tmp/rel/*.deb || ch apt-get -f install -y
+          ch bash -c 'dpkg -i /var/tmp/rel/*.deb' || ch apt-get -f install -y
           sudo rm -rf "$T/var/tmp/rel"
           ch systemctl enable zhiyu-sensord
           # ALSA UCM profile for the sm8750 card
