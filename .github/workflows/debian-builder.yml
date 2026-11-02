@@ -126,7 +126,7 @@ jobs:
           # ---- 3. application layer ----
           APPS="qbootctl
                 wireless-regdb wpasupplicant iw rfkill alsa-ucm-conf
-                vainfo systemd-timesyncd
+                vainfo systemd-timesyncd xz-utils
                 pipewire pipewire-pulse wireplumber alsa-utils
                 libva2 libva-drm2 libdrm2 libgbm1
                 network-manager bluetooth bluez
@@ -141,7 +141,12 @@ jobs:
           # keeps the support packages predictable.
           case "$DESKTOP" in
             kde) DESKTOP_PKGS="kde-standard plasma-login-manager" ;;
-            gnome) DESKTOP_PKGS="gnome gdm3" ;;
+            gnome)
+              # gnome alone does not pull the Adwaita icon theme or Cantarell:
+              # without them the shell has no symbolic icons (missing arrows,
+              # missing panel icons) and falls back to an ugly font.
+              DESKTOP_PKGS="gnome gdm3 adwaita-icon-theme fonts-cantarell
+                            fonts-dejavu-core gnome-themes-extra" ;;
             plasmamobile)
               # plasma-mobile pulls the shell and the mobile settings client;
               # the applications a tablet needs are listed explicitly.
