@@ -213,7 +213,13 @@ jobs:
             plasmamobile)
               # Plasma Mobile: phone-style shell (plasma-workspace, kwin,
               # plasma-nano, plasma-keyboard, plasma-nm/pa come with it).
-              APPS+=(plasma-mobile plasma-login-manager)
+              # plasma-mobile is only the shell: no browser, no settings
+              # app, no file manager.  Add the apps a tablet needs, plus the
+              # mobile settings client.
+              APPS+=(plasma-mobile plasma-login-manager
+                     angelfish plasma-settings plasma-camera
+                     dolphin konsole kate okular gwenview ark spectacle
+                     kalk kclock calindori discover)
               DM=plasmalogin ;;
             none)
               DM= ;;
@@ -283,6 +289,22 @@ jobs:
           grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
 
           # ---- 5. default boot target ----
+          # Plasma Mobile is hardcoded to the phone form factor by its own
+          # session script (PLASMA_PLATFORM=phone:handset) even on a 12.7 inch
+          # tablet.  The shell's metadata does not restrict form factors, so
+          # ask for the tablet one.
+          if [ "$DESKTOP" = plasmamobile ] && [ -f "$T/usr/bin/startplasmamobile" ]; then
+            sudo sed -i 's/^export PLASMA_PLATFORM=.*/export PLASMA_PLATFORM=tablet/' \
+              "$T/usr/bin/startplasmamobile"
+            grep -n PLASMA_PLATFORM "$T/usr/bin/startplasmamobile"
+            # The mobile lock screen asks for a PIN that nobody has set.
+            sudo install -Dm644 /dev/stdin "$T/etc/xdg/kscreenlockerrc" >/dev/null <<'EOF'
+          [Daemon]
+          Autolock=false
+          LockOnResume=false
+          EOF
+          fi
+
           # default boot target
           c systemctl set-default graphical.target
 

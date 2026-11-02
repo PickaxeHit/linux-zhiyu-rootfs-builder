@@ -142,7 +142,12 @@ jobs:
           case "$DESKTOP" in
             kde) DESKTOP_PKGS="kde-standard plasma-login-manager" ;;
             gnome) DESKTOP_PKGS="gnome gdm3" ;;
-            plasmamobile) DESKTOP_PKGS="plasma-mobile plasma-login-manager" ;;
+            plasmamobile)
+              # plasma-mobile pulls the shell and the mobile settings client;
+              # the applications a tablet needs are listed explicitly.
+              DESKTOP_PKGS="plasma-mobile plasma-login-manager
+                            angelfish dolphin konsole kate okular gwenview
+                            ark kalk kclock discover" ;;
             none) DESKTOP_PKGS="" ;;
             *) echo "bad desktop"; exit 1 ;;
           esac
@@ -195,6 +200,20 @@ jobs:
               ;;
             gnome) ch systemctl enable gdm3 ;;
           esac
+
+          # A 12.7 inch screen is not a handset: the Plasma Mobile session
+          # script hardcodes the phone form factor, so ask for tablet.  Its
+          # shell metadata does not restrict form factors.
+          if [ "$DESKTOP" = plasmamobile ] && [ -f "$T/usr/bin/startplasmamobile" ]; then
+            sudo sed -i 's/^export PLASMA_PLATFORM=.*/export PLASMA_PLATFORM=tablet/' \
+              "$T/usr/bin/startplasmamobile"
+            # The mobile lock screen asks for a PIN that nobody has set.
+            sudo install -Dm644 /dev/stdin "$T/etc/xdg/kscreenlockerrc" >/dev/null <<'EOF'
+          [Daemon]
+          Autolock=false
+          LockOnResume=false
+          EOF
+          fi
 
           ch systemctl set-default graphical.target
 
