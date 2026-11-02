@@ -126,6 +126,7 @@ jobs:
           # ---- 3. application layer ----
           APPS="qbootctl
                 wireless-regdb wpasupplicant iw rfkill alsa-ucm-conf
+                vainfo systemd-timesyncd
                 pipewire pipewire-pulse wireplumber alsa-utils
                 libva2 libva-drm2 libdrm2 libgbm1
                 network-manager bluetooth bluez
@@ -170,7 +171,7 @@ jobs:
           echo '%sudo ALL=(ALL:ALL) ALL' | sudo tee "$T/etc/sudoers.d/10-sudo" >/dev/null
           sudo chmod 440 "$T/etc/sudoers.d/10-sudo"
           Z="$PWD/zhiyu"
-          ch systemctl enable NetworkManager bluetooth ssh
+          ch systemctl enable NetworkManager bluetooth ssh systemd-timesyncd
           case "$DESKTOP" in
             kde)
               if ch apt-cache show plasma-login-manager >/dev/null 2>&1; then
