@@ -343,8 +343,10 @@ jobs:
           sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-fastrpc.rules" >/dev/null <<'EOF'
           KERNEL=="fastrpc-*", SUBSYSTEM=="misc", GROUP="fastrpc", MODE="0660"
           EOF
-          sudo install -d "$T/usr/share/qcom/sensors/registry"
-          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
+          # The SNS config/registry arrives with zhiyu-firmware; only the
+          # writable registry directory has to be created for the fastrpc user.
+          ch systemd-sysusers || true
+          ch install -d -o fastrpc -g fastrpc -m 755 /usr/share/qcom/sensors/registry
 
           # ---- 6. boot slot marking ----
           # Debian's qbootctl package ships qbootctl.service, which runs

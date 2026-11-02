@@ -242,10 +242,10 @@ jobs:
           sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-fastrpc.rules" >/dev/null <<'EOF'
           KERNEL=="fastrpc-*", SUBSYSTEM=="misc", GROUP="fastrpc", MODE="0660"
           EOF
-          # Sensor registry / config served to the ADSP (from the stock vendor
-          # image, see initramfs-src/blobs/sensors).
-          sudo install -d "$T/usr/share/qcom/sensors/registry"
-          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
+          # The SNS config/registry now arrives with zhiyu-firmware; only the
+          # writable registry directory has to be created for the fastrpc user.
+          sudo systemd-sysusers --root="$T" >/dev/null 2>&1 || true
+          c install -d -o fastrpc -g fastrpc -m 755 /usr/share/qcom/sensors/registry
           sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
           sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
           c test -x /usr/bin/qbootctl
