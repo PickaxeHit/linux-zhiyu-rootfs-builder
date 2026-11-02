@@ -32,10 +32,10 @@ on:
 
 env:
   MIRROR: http://deb.debian.org/debian
-  # Same two helpers as the ALARM image: qbootctl marks the boot slot
-  # successful, qcom-va-driver provides /usr/lib/dri/qcom_drv_video.so.
-  QBOOTCTL_URL: https://github.com/linux-msm/qbootctl/archive/refs/tags/0.2.2.tar.gz
-  QBOOTCTL_SRC: qbootctl-0.2.2
+  # qbootctl marks the boot slot successful (Debian packages it, our ALARM
+  # image has to build it from the AUR).  qcom-va-driver provides
+  # /usr/lib/dri/qcom_drv_video.so; Debian has it in sid only, so it is built
+  # from this pinned tarball when the release does not carry it.
   VA_DRIVER_URL: https://github.com/radxa-pkg/qcom-va-driver/archive/0980a1decf26d34c9aa71cd0a4a0d25703a7a17f.tar.gz
   VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
 
@@ -118,7 +118,8 @@ jobs:
             pciutils usbutils iproute2 iputils-ping rfkill
 
           # ---- 3. application layer ----
-          APPS="pipewire pipewire-pulse wireplumber alsa-utils
+          APPS="qbootctl
+                pipewire pipewire-pulse wireplumber alsa-utils
                 libva2 libva-drm2 libdrm2 libgbm1
                 network-manager bluetooth bluez
                 fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
@@ -130,11 +131,6 @@ jobs:
             *) echo "bad desktop"; exit 1 ;;
           esac
           ch apt-get install -y --no-install-recommends $APPS
-
-          # build tools for the two helper packages
-          ch apt-get install -y --no-install-recommends \
-            meson ninja-build pkg-config g++ libva-dev libdrm-dev \
-            libgbm-dev libegl-dev libgles-dev
 
           # ---- 4. configure ----
           sudo sed -i -E 's/^# *(en_US\.UTF-8|zh_CN\.UTF-8)/\1/' "$T/etc/locale.gen"
@@ -169,53 +165,46 @@ jobs:
           sudo mkdir -p "$T/usr/share/alsa/ucm2"
           sudo cp -a --no-preserve=ownership "$U/." "$T/usr/share/alsa/ucm2/"
 
-          # ---- 5. helper packages, built inside the target ----
-          # qbootctl: mark the booted slot successful on every boot
+          # ---- 5. VA-API driver ----
+          # Debian unstable ships qcom-va-driver (1.1.0); trixie and forky do
+          # not, so fall back to the pinned upstream tarball and install it as
+          # a tiny .deb.  Without it /usr/lib/dri has no qcom/msm/v4l2 driver
+          # and vainfo reports no entrypoints.
           sudo mkdir -p "$T/var/tmp/build"
-          sudo curl -fsSL "$QBOOTCTL_URL" -o "$T/var/tmp/build/qbootctl.tar.gz"
-          ch tar -xzf /var/tmp/build/qbootctl.tar.gz -C /var/tmp/build
-          ch meson setup /var/tmp/build/qbootctl-build "/var/tmp/build/$QBOOTCTL_SRC" \
-            --buildtype=release --prefix=/usr --libdir=lib
-          ch meson compile -C /var/tmp/build/qbootctl-build
-          sudo install -Dm755 "$T/var/tmp/build/qbootctl-build/qbootctl" "$T/usr/bin/qbootctl"
-
-          # qcom-va-driver: VA-API backend for the Iris video codec
-          sudo curl -fsSL "$VA_DRIVER_URL" -o "$T/var/tmp/build/va.tar.gz"
-          ch tar -xzf /var/tmp/build/va.tar.gz -C /var/tmp/build
-          ch meson setup /var/tmp/build/va-build "/var/tmp/build/$VA_DRIVER_SRC" \
-            --buildtype=release --prefix=/usr --libdir=lib \
-            -Dgpu_copy=auto -Dcdsp_vpp=disabled -Dvulkan_vpp=disabled
-          ch meson compile -C /var/tmp/build/va-build
-          sudo install -d "$T/var/tmp/va-root/DEBIAN"
-          printf 'Package: qcom-va-driver\nVersion: 1.1.1-1\nArchitecture: arm64\nMaintainer: rootfs-builder\nDepends: libva2, libdrm2, libgbm1, libegl1, libgles2\nDescription: VA-API backend for Qualcomm Iris stateful V4L2 M2M\n' |
-            sudo tee "$T/var/tmp/va-root/DEBIAN/control" >/dev/null
-          sudo DESTDIR="$T/var/tmp/va-root" meson install -C "$T/var/tmp/build/va-build" --no-rebuild
-          sudo chown -R root:root "$T/var/tmp/va-root"
-          sudo dpkg-deb --build --root-owner-group "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb" >/dev/null
-          ch dpkg -i /var/tmp/qcom-va-driver.deb
+          if ch apt-cache show qcom-va-driver >/dev/null 2>&1; then
+            echo "using Debian's qcom-va-driver package"
+            ch apt-get install -y --no-install-recommends qcom-va-driver
+          else
+            echo "qcom-va-driver is not packaged for $RELEASE, building it"
+            ch apt-get install -y --no-install-recommends \
+              meson ninja-build pkg-config g++ libva-dev libdrm-dev \
+              libgbm-dev libegl-dev libgles-dev
+            sudo curl -fsSL "$VA_DRIVER_URL" -o "$T/var/tmp/build/va.tar.gz"
+            ch tar -xzf /var/tmp/build/va.tar.gz -C /var/tmp/build
+            ch meson setup /var/tmp/build/va-build "/var/tmp/build/$VA_DRIVER_SRC" \
+              --buildtype=release --prefix=/usr --libdir=lib \
+              -Dgpu_copy=auto -Dcdsp_vpp=disabled -Dvulkan_vpp=disabled
+            ch meson compile -C /var/tmp/build/va-build
+            sudo install -d "$T/var/tmp/va-root/DEBIAN"
+            printf 'Package: qcom-va-driver\nVersion: 1.1.1-1\nArchitecture: arm64\nMaintainer: rootfs-builder\nDepends: libva2, libdrm2, libgbm1, libegl1, libgles2\nDescription: VA-API backend for Qualcomm Iris stateful V4L2 M2M\n' |
+              sudo tee "$T/var/tmp/va-root/DEBIAN/control" >/dev/null
+            sudo DESTDIR="$T/var/tmp/va-root" meson install -C "$T/var/tmp/build/va-build" --no-rebuild
+            sudo chown -R root:root "$T/var/tmp/va-root"
+            sudo dpkg-deb --build --root-owner-group "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb" >/dev/null
+            ch dpkg -i /var/tmp/qcom-va-driver.deb
+          fi
 
           # ---- 6. boot slot marking ----
-          sudo tee "$T/etc/systemd/system/qbootctl-mark-success.service" >/dev/null <<'EOF'
-          [Unit]
-          Description=Mark current boot slot as successful (qbootctl -m)
-          After=local-fs.target
-
-          [Service]
-          Type=oneshot
-          ExecStart=/usr/bin/qbootctl -m
-          RemainAfterExit=yes
-
-          [Install]
-          WantedBy=multi-user.target
-          EOF
-          ch systemctl enable qbootctl-mark-success.service
+          # Debian's qbootctl package ships qbootctl.service, which runs
+          # "qbootctl -m" once boot-complete.target is reached.
+          ch systemctl enable qbootctl.service
 
           # ---- 7. verify ----
-          UNITS="NetworkManager bluetooth qbootctl-mark-success"
+          UNITS="NetworkManager bluetooth qbootctl"
           [ "$DESKTOP" = kde ] && UNITS="$UNITS sddm"
           ch systemctl is-enabled $UNITS
           ch systemctl get-default
-          ch dpkg-query -W --showformat='${Package} ${Version}\n' qcom-va-driver mesa-libgallium 2>/dev/null || true
+          ch dpkg-query -W --showformat='${Package} ${Version}\n' qbootctl qcom-va-driver mesa-libgallium 2>/dev/null || true
           ls -l "$T/usr/lib/dri/" | grep -E 'qcom|msm|v4l2'
           ls -ld "$T/usr/share/alsa/ucm2/conf.d/sm8750"
           find "$T/usr/lib/firmware" -type f | wc -l
