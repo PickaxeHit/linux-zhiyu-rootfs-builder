@@ -13,7 +13,7 @@ on:
       desktop:
         description: Desktop environment
         type: choice
-        options: [kde, none]
+        options: [kde, gnome, none]
         default: kde
       username:
         description: Initial username
@@ -129,6 +129,7 @@ jobs:
           [ "$FIRMWARE" = "true" ] && APPS="$APPS firmware-linux"
           case "$DESKTOP" in
             kde) APPS="$APPS kde-plasma-desktop sddm konsole" ;;
+            gnome) APPS="$APPS gnome gdm3" ;;
             none) ;;
             *) echo "bad desktop"; exit 1 ;;
           esac
@@ -164,7 +165,10 @@ jobs:
           echo '%sudo ALL=(ALL:ALL) ALL' | sudo tee "$T/etc/sudoers.d/10-sudo" >/dev/null
           sudo chmod 440 "$T/etc/sudoers.d/10-sudo"
           ch systemctl enable NetworkManager bluetooth ssh
-          [ "$DESKTOP" = kde ] && ch systemctl enable sddm
+          case "$DESKTOP" in
+            kde) ch systemctl enable sddm ;;
+            gnome) ch systemctl enable gdm3 ;;
+          esac
           ch systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
           ch systemctl set-default graphical.target
 
@@ -220,7 +224,10 @@ jobs:
 
           # ---- 7. verify ----
           UNITS="NetworkManager bluetooth qbootctl"
-          [ "$DESKTOP" = kde ] && UNITS="$UNITS sddm"
+          case "$DESKTOP" in
+            kde) UNITS="$UNITS sddm" ;;
+            gnome) UNITS="$UNITS gdm3" ;;
+          esac
           ch systemctl is-enabled $UNITS
           ch systemctl get-default
           ch dpkg-query -W --showformat='${Package} ${Version}\n' qbootctl qcom-va-driver mesa-libgallium 2>/dev/null || true
