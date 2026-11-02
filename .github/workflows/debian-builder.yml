@@ -173,6 +173,25 @@ jobs:
             kde) ch systemctl enable sddm ;;
             gnome) ch systemctl enable gdm3 ;;
           esac
+
+          # Autologin straight into the desktop.  The tablet has no keyboard
+          # and sddm/trixie's greeter has no on-screen keyboard, so a login
+          # prompt leaves the device unusable.  (The ALARM image uses
+          # plasma-login-manager, which brings its own keyboard; sddm is what
+          # Debian's install brings and this makes the prompt disappear.)
+          case "$DESKTOP" in
+            kde)
+              sudo install -d "$T/etc/sddm.conf.d"
+              printf '[Autologin]\nUser=%s\nSession=plasma\n' "$USERNAME" |
+                sudo tee "$T/etc/sddm.conf.d/autologin.conf" >/dev/null
+              ;;
+            gnome)
+              if [ -f "$T/etc/gdm3/custom.conf" ]; then
+                sudo sed -i "s/^\[daemon\]/[daemon]\nAutomaticLoginEnable=true\nAutomaticLogin=$USERNAME/" \
+                  "$T/etc/gdm3/custom.conf"
+              fi
+              ;;
+          esac
           ch systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
           ch systemctl set-default graphical.target
 
