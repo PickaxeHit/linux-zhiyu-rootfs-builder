@@ -129,7 +129,8 @@ jobs:
           bc pacman-key --init
           bc pacman-key --populate archlinuxarm
           bc pacman -Syu --noconfirm
-          bc pacman -S --needed --noconfirm arch-install-scripts base-devel git meson ninja pkgconf curl
+          # protobuf-c is what sensh links against; qmic/qrtr are built below
+          bc pacman -S --needed --noconfirm arch-install-scripts base-devel git meson ninja pkgconf curl protobuf-c
 
           # zstd packages for makepkg (bootstrap side)
           bc sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" /etc/makepkg.conf
