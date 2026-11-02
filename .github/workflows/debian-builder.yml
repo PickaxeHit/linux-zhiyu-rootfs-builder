@@ -152,7 +152,8 @@ jobs:
               # the applications a tablet needs are listed explicitly.
               DESKTOP_PKGS="plasma-mobile sddm
                             angelfish dolphin konsole kate okular gwenview
-                            ark kalk kclock discover" ;;
+                            ark kalk kclock discover
+                            breeze-icon-theme upower" ;;
             none) DESKTOP_PKGS="" ;;
             *) echo "bad desktop"; exit 1 ;;
           esac
@@ -212,6 +213,16 @@ jobs:
           # script hardcodes the phone form factor, so ask for tablet.  Its
           # shell metadata does not restrict form factors.
           if [ "$DESKTOP" = plasmamobile ]; then
+            # Neither plasma-mobile nor the look-and-feel sets an icon theme
+            # on this image, so everything falls back to hicolor and every
+            # symbolic icon (keyboard Enter/Caps, arrows, panel) is blank.
+            sudo install -Dm644 /dev/stdin "$T/etc/xdg/kdeglobals" >/dev/null <<EOF
+          [Icons]
+          Theme=breeze
+
+          [KDE]
+          LookAndFeelPackage=org.kde.breeze.mobile
+          EOF
             sudo install -d "$T/etc/sddm.conf.d"
             printf '[Autologin]\nUser=%s\nSession=plasma-mobile\nRelogin=true\n' "$USERNAME" |
               sudo tee "$T/etc/sddm.conf.d/10-autologin.conf" >/dev/null

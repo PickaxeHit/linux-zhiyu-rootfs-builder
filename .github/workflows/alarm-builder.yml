@@ -219,7 +219,8 @@ jobs:
               APPS+=(plasma-mobile sddm
                      angelfish plasma-settings plasma-camera
                      dolphin konsole kate okular gwenview ark spectacle
-                     kalk kclock calindori discover)
+                     kalk kclock calindori discover
+                     breeze-icons upower)
               # plasmalogin kept hanging or spawning a lock screen on this
               # board; sddm with autologin removes the greeter entirely.
               DM=sddm ;;
@@ -306,6 +307,10 @@ jobs:
           # tablet.  The shell's metadata does not restrict form factors, so
           # ask for the tablet one.
           if [ "$DESKTOP" = plasmamobile ]; then
+            sudo install -Dm644 /dev/stdin "$T/etc/xdg/kdeglobals" >/dev/null <<EOF
+          [Icons]
+          Theme=breeze
+          EOF
             # Log straight into the mobile session: no greeter, no lock screen,
             # no on-screen keyboard needed.
             sudo install -d "$T/etc/sddm.conf.d"
