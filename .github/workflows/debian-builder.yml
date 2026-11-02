@@ -13,7 +13,7 @@ on:
       desktop:
         description: Desktop environment
         type: choice
-        options: [kde, gnome, none]
+        options: [kde, gnome, plasmamobile, none]
         default: kde
       username:
         description: Initial username
@@ -136,6 +136,7 @@ jobs:
           case "$DESKTOP" in
             kde) APPS="$APPS kde-plasma-desktop plasma-login-manager konsole" ;;
             gnome) APPS="$APPS gnome gdm3" ;;
+            plasmamobile) APPS="$APPS plasma-mobile" ;;
             none) ;;
             *) echo "bad desktop"; exit 1 ;;
           esac
@@ -173,7 +174,7 @@ jobs:
           Z="$PWD/zhiyu"
           ch systemctl enable NetworkManager bluetooth ssh systemd-timesyncd
           case "$DESKTOP" in
-            kde)
+            kde|plasmamobile)
               if ch apt-cache show plasma-login-manager >/dev/null 2>&1; then
                 ch systemctl enable plasmalogin
               else
@@ -243,7 +244,7 @@ jobs:
           # ---- 7. verify ----
           UNITS="NetworkManager bluetooth qbootctl"
           case "$DESKTOP" in
-            kde) UNITS="$UNITS plasmalogin || true" ;;
+            kde|plasmamobile) UNITS="$UNITS plasmalogin || true" ;;
             gnome) UNITS="$UNITS gdm3" ;;
           esac
           ch systemctl is-enabled $UNITS || true

@@ -6,7 +6,7 @@ on:
       desktop:
         description: Desktop environment
         type: choice
-        options: [kde, gnome, none]
+        options: [kde, gnome, plasmamobile, none]
         default: kde
       username:
         description: Initial username
@@ -201,6 +201,11 @@ jobs:
             gnome)
               APPS+=(gnome)
               DM=gdm ;;
+            plasmamobile)
+              # Plasma Mobile: phone-style shell (plasma-workspace, kwin,
+              # plasma-nano, plasma-keyboard, plasma-nm/pa come with it).
+              APPS+=(plasma-mobile)
+              DM=plasmalogin ;;
             none)
               DM= ;;
             *) echo "bad desktop"; exit 1 ;;
