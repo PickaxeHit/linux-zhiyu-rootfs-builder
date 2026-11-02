@@ -268,31 +268,7 @@ jobs:
           sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
           grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
 
-          # ---- 5. state the login manager expects ----
-          # plasma-login-manager ships /usr/lib/sysusers.d/plasmalogin.conf,
-          # whose home is /var/lib/plasmalogin, and systemd-sysusers creates
-          # that directory through the pacman hook that runs when the package
-          # is installed.  That hook used to fail because the target was owned
-          # by the runner, and the greeter then exited right after start
-          # ("chdir(/var/lib/plasmalogin) failed",
-          # PLASMALOGIN::Auth::HELPER_OTHER_ERROR) while graphical.target was
-          # reached.  With a root owned target the hook does the job, so only
-          # report it - and fall back to creating the directory by hand if the
-          # hook ever stops working.
-          if c getent passwd plasmalogin >/dev/null; then
-            if [ -d "$T/var/lib/plasmalogin" ]; then
-              echo "plasmalogin home: $(stat -c '%U:%G %a' "$T/var/lib/plasmalogin") (created by systemd-sysusers)"
-            else
-              echo "::warning::systemd-sysusers did not create /var/lib/plasmalogin, creating it here"
-              uid=$(c id -u plasmalogin)
-              gid=$(c id -g plasmalogin)
-              sudo install -d -m 750 -o "$uid" -g "$gid" "$T/var/lib/plasmalogin"
-            fi
-          fi
-          # Create /tmp/.X11-unix and friends now that "/" is root owned, so the
-          # image is complete even before tmpfiles runs at boot.
-          c systemd-tmpfiles --create --boot --exclude-prefix=/dev || true
-
+          # ---- 5. default boot target ----
           # default boot target
           c systemctl set-default graphical.target
 
@@ -322,10 +298,8 @@ jobs:
           echo "--- packages that matter:"
           c pacman -Qq qbootctl qcom-va-driver
           ls -l "$T/usr/lib/dri/" | grep -E 'qcom|msm|v4l2'
-          echo "--- ownership and login manager state:"
+          echo "--- ownership:"
           stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
-          ls -ld "$T/var/lib/plasmalogin" 2>/dev/null || echo "plasmalogin home MISSING"
-          ls -ld "$T/tmp/.X11-unix" 2>/dev/null || echo "no /tmp/.X11-unix"
 
           # ---- 7. cleanup ----
           c gpgconf --homedir /etc/pacman.d/gnupg --kill all || true
@@ -342,12 +316,14 @@ jobs:
         env:
           DESKTOP: ${{ inputs.desktop }}
         run: |
-          OUT="alarm-aarch64-${DESKTOP}-rootfs.tar.zst"
+          OUT="alarm-aarch64-${DESKTOP}-rootfs.tar.xz"
           # The top level "." entry must be root owned in the archive too: a
           # non-root owned "/" makes systemd-tmpfiles abort at boot.
           sudo chown root:root target
+          # xz -9e is noticeably smaller than zstd -19 here and the runtime is
+          # acceptable for a rootfs that is downloaded once per device.
           sudo tar --numeric-owner --xattrs --acls -C target \
-            -I 'zstd -T0 -19' -cpf "$OUT" .
+            -I 'xz -9e -T0' -cpf "$OUT" .
           sudo chown "$USER" "$OUT"
           sha256sum "$OUT" | tee "$OUT.sha256"
           ls -lh "$OUT"
@@ -356,7 +332,7 @@ jobs:
         with:
           name: alarm-aarch64-${{ inputs.desktop }}-rootfs
           path: |
-            alarm-aarch64-*-rootfs.tar.zst
-            alarm-aarch64-*-rootfs.tar.zst.sha256
+            alarm-aarch64-*-rootfs.tar.xz
+            alarm-aarch64-*-rootfs.tar.xz.sha256
           compression-level: 0
           retention-days: 7
