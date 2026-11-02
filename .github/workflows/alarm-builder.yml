@@ -191,6 +191,11 @@ jobs:
 
           bc pacstrap -K /mnt/target "${PKGS[@]}"
 
+          # qbootctl and the VA-API driver were built in 1b/1c; install them
+          # into the new system before anything verifies them.
+          c bash -c 'pacman -U --noconfirm /var/tmp/qbootctl-*.pkg.tar.zst'
+          c bash -c 'pacman -U --noconfirm /var/tmp/qcom-va-driver-*.pkg.tar.zst'
+
           # ---- 2b. install hexagonrpc into the new system ----
           # hexagonrpcd is how the desktop reaches the ADSP (file service,
           # sensors).  It is a plain meson project; install it into the target
@@ -352,8 +357,6 @@ jobs:
           if c pacman -V | grep -qE 'Pacman v([7-9]|[1-9][0-9])\.'; then
             sudo sed -i '/^\[options\]/a DisableSandbox' "$T/etc/pacman.conf"
           fi
-          c bash -c 'pacman -U --noconfirm /var/tmp/qbootctl-*.pkg.tar.zst'
-          c bash -c 'pacman -U --noconfirm /var/tmp/qcom-va-driver-*.pkg.tar.zst'
 
           # /etc/resolv.conf ships as a symlink to systemd-resolved's stub
           # (resolved itself is part of the systemd package), but resolved
