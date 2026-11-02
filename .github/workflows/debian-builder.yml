@@ -350,9 +350,6 @@ jobs:
           # writable registry directory has to be created for the fastrpc user.
           ch systemd-sysusers || true
           ch install -d -o fastrpc -g fastrpc -m 755 /usr/share/qcom/sensors/registry
-          # hexagonrpcd's units require /dev/fastrpc-adsp, so load the driver
-          # at boot instead of relying on udev/autoload.
-          printf 'fastrpc\n' | sudo tee "$T/etc/modules-load.d/fastrpc.conf" >/dev/null
 
           # ---- 6. boot slot marking ----
           # Debian's qbootctl package ships qbootctl.service, which runs

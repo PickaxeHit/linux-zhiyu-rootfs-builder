@@ -255,9 +255,6 @@ jobs:
           # The runner has no systemd-sysusers; the target does.
           c systemd-sysusers
           c install -d -o fastrpc -g fastrpc -m 755 /usr/share/qcom/sensors/registry
-          # hexagonrpcd's units require /dev/fastrpc-adsp, so load the driver
-          # at boot instead of relying on udev/autoload.
-          printf 'fastrpc\n' | sudo tee "$T/etc/modules-load.d/fastrpc.conf" >/dev/null
           sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
           sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
           c test -x /usr/bin/qbootctl
