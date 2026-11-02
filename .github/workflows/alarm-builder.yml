@@ -62,6 +62,8 @@ jobs:
             initramfs-src/blobs/firmware
             initramfs-src/tplg/sm8750-tplg.bin
             scripts/alsa-ucm2
+            scripts/usb-ncm-gadget.sh
+            scripts/usb-ncm-gadget.service
 
       - name: Build rootfs
         env:
@@ -227,13 +229,21 @@ jobs:
             c chown "$USERNAME:$USERNAME" "/home/$USERNAME/.zshrc"
           fi
 
+          Z="$PWD/zhiyu"
+          # USB NCM gadget: a wired SSH path that does not depend on the
+          # wireless radio or on NetworkManager, which makes a freshly built
+          # image reachable for testing.
+          sudo install -Dm755 "$Z/scripts/usb-ncm-gadget.sh" \
+            "$T/usr/local/sbin/usb-ncm-gadget.sh"
+          sudo install -Dm644 "$Z/scripts/usb-ncm-gadget.service" \
+            "$T/etc/systemd/system/usb-ncm-gadget.service"
+
           # services
-          c systemctl enable NetworkManager bluetooth
+          c systemctl enable NetworkManager bluetooth usb-ncm-gadget
           [ -z "$DM" ] || c systemctl enable "$DM"
           c systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 
           # firmware blobs from linux-zhiyu
-          Z="$PWD/zhiyu"
           [ -d "$Z/initramfs-src/blobs/firmware" ] || { echo "firmware dir missing"; exit 1; }
           sudo mkdir -p "$T/usr/lib/firmware"
           sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/firmware/." "$T/usr/lib/firmware/"
