@@ -170,13 +170,6 @@ jobs:
           echo '%sudo ALL=(ALL:ALL) ALL' | sudo tee "$T/etc/sudoers.d/10-sudo" >/dev/null
           sudo chmod 440 "$T/etc/sudoers.d/10-sudo"
           Z="$PWD/zhiyu"
-          # Keep the factory address: NetworkManager randomises the MAC for
-          # scans by default and the board's own MAC is what the access point
-          # expects.
-          sudo install -d "$T/etc/NetworkManager/conf.d"
-          printf '[device]\nwifi.scan-rand-mac-address=no\n' |
-            sudo tee "$T/etc/NetworkManager/conf.d/10-wifi-mac.conf" >/dev/null
-
           ch systemctl enable NetworkManager bluetooth ssh
           case "$DESKTOP" in
             kde)
