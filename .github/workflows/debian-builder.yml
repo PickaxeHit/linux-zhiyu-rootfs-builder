@@ -124,7 +124,6 @@ jobs:
 
           # ---- 2. base system ----
           ch apt-get install -y --no-install-recommends \
-            gst-plugin-libcamera \
             sudo curl git vim zsh openssh-server kmod less man-db tzdata \
             passwd pciutils usbutils iproute2 iputils-ping rfkill
 
