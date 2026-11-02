@@ -246,8 +246,10 @@ jobs:
           fi
 
           ch systemctl set-default graphical.target
-          # sshd is how a headless board is reached at all
-          ch systemctl enable sshd
+          # sshd is how a headless board is reached at all.  Debian's
+          # sshd.service is a symlink to ssh.service and systemd refuses to
+          # enable a "linked" unit.
+          ch systemctl enable ssh
 
           # Firmware (blobs + AudioReach topology), libcamera and sensord come
           # from the linux-zhiyu release; the topology is what gives the card
