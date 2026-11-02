@@ -216,11 +216,13 @@ jobs:
               # plasma-mobile is only the shell: no browser, no settings
               # app, no file manager.  Add the apps a tablet needs, plus the
               # mobile settings client.
-              APPS+=(plasma-mobile plasma-login-manager
+              APPS+=(plasma-mobile sddm
                      angelfish plasma-settings plasma-camera
                      dolphin konsole kate okular gwenview ark spectacle
                      kalk kclock calindori discover)
-              DM=plasmalogin ;;
+              # plasmalogin kept hanging or spawning a lock screen on this
+              # board; sddm with autologin removes the greeter entirely.
+              DM=sddm ;;
             none)
               DM= ;;
             *) echo "bad desktop"; exit 1 ;;
@@ -284,6 +286,16 @@ jobs:
           c test -x /usr/bin/qbootctl
           c test -f /usr/lib/dri/qcom_drv_video.so
 
+          # The systemd package leaves /etc/resolv.conf pointing at
+          # systemd-resolved's stub, which this image does not run: without a
+          # real file nothing can resolve names (pacman: Could not resolve
+          # host).
+          if [ ! -e "$T/etc/resolv.conf" ]; then
+            sudo rm -f "$T/etc/resolv.conf"
+            printf 'nameserver 223.5.5.5\nnameserver 1.1.1.1\n' |
+              sudo tee "$T/etc/resolv.conf" >/dev/null
+          fi
+
           # makepkg defaults to zstd in the new system
           sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
           grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
@@ -293,6 +305,13 @@ jobs:
           # session script (PLASMA_PLATFORM=phone:handset) even on a 12.7 inch
           # tablet.  The shell's metadata does not restrict form factors, so
           # ask for the tablet one.
+          if [ "$DESKTOP" = plasmamobile ]; then
+            # Log straight into the mobile session: no greeter, no lock screen,
+            # no on-screen keyboard needed.
+            sudo install -d "$T/etc/sddm.conf.d"
+            printf '[Autologin]\nUser=%s\nSession=plasma-mobile\nRelogin=true\n' "$USERNAME" |
+              sudo tee "$T/etc/sddm.conf.d/10-autologin.conf" >/dev/null
+          fi
           if [ "$DESKTOP" = plasmamobile ] && [ -f "$T/usr/bin/startplasmamobile" ]; then
             sudo sed -i 's/^export PLASMA_PLATFORM=.*/export PLASMA_PLATFORM=tablet/' \
               "$T/usr/bin/startplasmamobile"

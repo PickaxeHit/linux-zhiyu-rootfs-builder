@@ -145,7 +145,7 @@ jobs:
             plasmamobile)
               # plasma-mobile pulls the shell and the mobile settings client;
               # the applications a tablet needs are listed explicitly.
-              DESKTOP_PKGS="plasma-mobile plasma-login-manager
+              DESKTOP_PKGS="plasma-mobile sddm
                             angelfish dolphin konsole kate okular gwenview
                             ark kalk kclock discover" ;;
             none) DESKTOP_PKGS="" ;;
@@ -187,9 +187,11 @@ jobs:
           ch systemctl enable NetworkManager bluetooth ssh systemd-timesyncd
           case "$DESKTOP" in
             kde|plasmamobile)
-              # plasma-mobile does not pull a login manager, so install it
-              # here rather than relying on the desktop meta package.
-              if ch apt-cache show plasma-login-manager >/dev/null 2>&1; then
+              # Both options list their display manager explicitly; only the
+              # kde branch needs this fallback for trixie.
+              if [ "$DESKTOP" = plasmamobile ]; then
+                ch systemctl enable sddm
+              elif ch apt-cache show plasma-login-manager >/dev/null 2>&1; then
                 ch apt-get install -y --no-install-recommends plasma-login-manager
                 ch systemctl enable plasmalogin
               else
@@ -204,6 +206,11 @@ jobs:
           # A 12.7 inch screen is not a handset: the Plasma Mobile session
           # script hardcodes the phone form factor, so ask for tablet.  Its
           # shell metadata does not restrict form factors.
+          if [ "$DESKTOP" = plasmamobile ]; then
+            sudo install -d "$T/etc/sddm.conf.d"
+            printf '[Autologin]\nUser=%s\nSession=plasma-mobile\nRelogin=true\n' "$USERNAME" |
+              sudo tee "$T/etc/sddm.conf.d/10-autologin.conf" >/dev/null
+          fi
           if [ "$DESKTOP" = plasmamobile ] && [ -f "$T/usr/bin/startplasmamobile" ]; then
             sudo sed -i 's/^export PLASMA_PLATFORM=.*/export PLASMA_PLATFORM=tablet/' \
               "$T/usr/bin/startplasmamobile"
@@ -269,7 +276,8 @@ jobs:
           # ---- 7. verify ----
           UNITS="NetworkManager bluetooth qbootctl"
           case "$DESKTOP" in
-            kde|plasmamobile) UNITS="$UNITS plasmalogin || true" ;;
+            kde) UNITS="$UNITS plasmalogin || true" ;;
+            plasmamobile) UNITS="$UNITS sddm" ;;
             gnome) UNITS="$UNITS gdm3" ;;
           esac
           ch systemctl is-enabled $UNITS || true
@@ -283,6 +291,12 @@ jobs:
           find "$T/usr/lib/firmware" -type f | wc -l
           md5sum "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
           stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
+
+          if [ ! -e "$T/etc/resolv.conf" ]; then
+            sudo rm -f "$T/etc/resolv.conf"
+            printf 'nameserver 223.5.5.5\nnameserver 1.1.1.1\n' |
+              sudo tee "$T/etc/resolv.conf" >/dev/null
+          fi
 
           # ---- 8. cleanup ----
           # Unmount the chroot pseudo filesystems before measuring the tree:
