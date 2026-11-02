@@ -239,6 +239,8 @@ jobs:
           fi
 
           ch systemctl set-default graphical.target
+          # sshd is how a headless board is reached at all
+          ch systemctl enable sshd
 
           # firmware blobs from linux-zhiyu (the board's WCN/ADSP/GPU blobs)
           [ -d "$Z/initramfs-src/blobs/firmware" ] || { echo "firmware dir missing"; exit 1; }

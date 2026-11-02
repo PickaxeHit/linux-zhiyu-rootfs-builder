@@ -331,6 +331,8 @@ jobs:
 
           # default boot target
           c systemctl set-default graphical.target
+          # sshd is how a headless board is reached at all
+          c systemctl enable sshd
 
           # mark the booted slot successful on every boot
           sudo tee "$T/etc/systemd/system/qbootctl-mark-success.service" >/dev/null <<'EOF'
