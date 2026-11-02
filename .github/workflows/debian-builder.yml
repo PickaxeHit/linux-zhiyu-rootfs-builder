@@ -4,7 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       release:
-        description: Debian release (trixie = 13 stable, forky = 14 testing, sid = unstable)
+        description: >-
+          Debian release.  mesa: forky 26.1.x, sid 26.2.x, trixie 25.x plus
+          26.1.x from backports (the workflow upgrades mesa for trixie).
         type: choice
         options: [trixie, forky, sid]
         default: forky
@@ -131,6 +133,23 @@ jobs:
             *) echo "bad desktop"; exit 1 ;;
           esac
           ch apt-get install -y --no-install-recommends $APPS
+
+          # The board's userspace (freedreno/msm) wants mesa 26 or newer.
+          # forky and sid already have it; trixie's main has 25.x, so pull
+          # mesa from backports there.
+          if [ "$RELEASE" = "trixie" ]; then
+            echo "deb $MIRROR trixie-backports main contrib non-free non-free-firmware" |
+              sudo tee -a "$T/etc/apt/sources.list" >/dev/null
+            ch apt-get update
+            ch apt-get install -y --no-install-recommends -t trixie-backports \
+              libgl1-mesa-dri mesa-vulkan-drivers libegl-mesa0 libglx-mesa0 libgbm1
+          fi
+          MESA_VER=$(ch dpkg-query -W -f='${Version}' libgl1-mesa-dri 2>/dev/null || true)
+          echo "mesa (libgl1-mesa-dri): $MESA_VER"
+          case "$MESA_VER" in
+            2[6-9].*|[3-9][0-9].*) ;;
+            *) echo "::error::mesa $MESA_VER is older than 26"; exit 1 ;;
+          esac
 
           # ---- 4. configure ----
           sudo sed -i -E 's/^# *(en_US\.UTF-8|zh_CN\.UTF-8)/\1/' "$T/etc/locale.gen"
