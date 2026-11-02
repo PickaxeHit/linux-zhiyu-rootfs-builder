@@ -38,6 +38,10 @@ env:
   # target only has to install a .pkg.tar.zst, exactly like qbootctl.
   VA_DRIVER_URL: https://github.com/radxa-pkg/qcom-va-driver/archive/0980a1decf26d34c9aa71cd0a4a0d25703a7a17f.tar.gz
   VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
+  # Desktop-side remote procedure daemon for the ADSP (hexagonrpcd + units).
+  # The AUR package for this is gone; build from upstream.
+  HEXAGONRPC_URL: https://github.com/linux-msm/hexagonrpc/archive/da7a3742ab8d5273a281b70ee11f16fb2cb6a690.tar.gz
+  HEXAGONRPC_SRC: hexagonrpc-da7a3742ab8d5273a281b70ee11f16fb2cb6a690
 
 jobs:
   build:
@@ -122,7 +126,7 @@ jobs:
           bc pacman-key --init
           bc pacman-key --populate archlinuxarm
           bc pacman -Syu --noconfirm
-          bc pacman -S --needed --noconfirm arch-install-scripts base-devel git meson ninja pkgconf
+          bc pacman -S --needed --noconfirm arch-install-scripts base-devel git meson ninja pkgconf curl
 
           # zstd packages for makepkg (bootstrap side)
           bc sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" /etc/makepkg.conf
@@ -282,6 +286,24 @@ jobs:
           fi
           c bash -c 'pacman -U --noconfirm /var/tmp/qbootctl-*.pkg.tar.zst'
           c bash -c 'pacman -U --noconfirm /var/tmp/qcom-va-driver-*.pkg.tar.zst'
+
+          # ---- 1d. build hexagonrpc inside the bootstrap ----
+          # hexagonrpcd is how the desktop reaches the ADSP (file service,
+          # sensors).  It is a plain meson project; install it into the target
+          # rootfs directly instead of packaging it, like the firmware blobs.
+          bc runuser -u builder -- bash -c "
+            set -e
+            cd ~
+            curl -fsSLO '$HEXAGONRPC_URL'
+            tar xf $(basename "$HEXAGONRPC_URL")
+            cd $HEXAGONRPC_SRC
+            meson setup build --buildtype=release --prefix=/usr --libdir=lib
+            ninja -C build
+            DESTDIR=\$PWD/stage meson install -C build
+          "
+          sudo cp -a "$B/home/builder/$HEXAGONRPC_SRC/stage/." "$T/"
+          # The sensor daemon talks to the ADSP through these two.
+          c systemctl enable hexagonrpcd-adsp-rootpd hexagonrpcd-adsp-sensorspd
           sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
           sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
           c test -x /usr/bin/qbootctl

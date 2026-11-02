@@ -43,6 +43,10 @@ env:
   # <= 3.4.30, so it installs on trixie and forky as well.
   VA_DEB_URL: http://deb.debian.org/debian/pool/main/q/qcom-va-driver/qcom-va-driver_1.1.0-1_arm64.deb
   VA_DRIVER_URL: https://github.com/radxa-pkg/qcom-va-driver/archive/0980a1decf26d34c9aa71cd0a4a0d25703a7a17f.tar.gz
+  # Desktop-side remote procedure daemon for the ADSP (hexagonrpcd + units);
+  # the AUR package is gone, so build upstream.
+  HEXAGONRPC_URL: https://github.com/linux-msm/hexagonrpc/archive/da7a3742ab8d5273a281b70ee11f16fb2cb6a690.tar.gz
+  HEXAGONRPC_SRC: hexagonrpc-da7a3742ab8d5273a281b70ee11f16fb2cb6a690
   VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
 
 jobs:
@@ -285,6 +289,21 @@ jobs:
             sudo dpkg-deb --build --root-owner-group "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb" >/dev/null
             ch dpkg -i /var/tmp/qcom-va-driver.deb
           fi
+
+          # ---- 5c. hexagonrpc (ADSP remote procedure daemon) ----
+          # hexagonrpcd + its systemd units; the sensor daemon and anything
+          # else talking to the ADSP needs these.
+          sudo mkdir -p "$T/var/tmp/build"
+          sudo curl -fsSL "$HEXAGONRPC_URL" -o "$T/var/tmp/build/hrpc.tar.gz"
+          ch tar -xzf /var/tmp/build/hrpc.tar.gz -C /var/tmp/build
+          ch apt-get install -y --no-install-recommends meson ninja-build pkg-config g++ libsystemd-dev curl
+          ch meson setup /var/tmp/build/hrpc-build "/var/tmp/build/$HEXAGONRPC_SRC" \
+            --buildtype=release --prefix=/usr --libdir=lib
+          ch meson compile -C /var/tmp/build/hrpc-build
+          ch env DESTDIR=/var/tmp/build/hrpc-root meson install \
+            -C /var/tmp/build/hrpc-build --no-rebuild
+          sudo cp -a "$T/var/tmp/build/hrpc-root/." "$T/"
+          ch systemctl enable hexagonrpcd-adsp-rootpd hexagonrpcd-adsp-sensorspd
 
           # ---- 6. boot slot marking ----
           # Debian's qbootctl package ships qbootctl.service, which runs
