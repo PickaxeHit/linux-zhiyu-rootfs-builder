@@ -255,6 +255,9 @@ jobs:
           # The runner has no systemd-sysusers; the target does.
           c systemd-sysusers
           c install -d -o fastrpc -g fastrpc -m 755 /usr/share/qcom/sensors/registry
+          # hexagonrpcd's units require /dev/fastrpc-adsp, so load the driver
+          # at boot instead of relying on udev/autoload.
+          printf 'fastrpc\n' | sudo tee "$T/etc/modules-load.d/fastrpc.conf" >/dev/null
           sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
           sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
           c test -x /usr/bin/qbootctl
@@ -339,7 +342,10 @@ jobs:
           # capture PCM, so UCM has no HiFi profile and PipeWire falls back to
           # Pro Audio), so the image no longer copies blobs/firmware itself.
           sudo mkdir -p "$T/var/tmp/rel"
-          for f in zhiyu-firmware zhiyu-libcamera zhiyu-sensord; do
+          # zhiyu-modules carries the full module tree: without it nothing
+          # outside the initramfs can be loaded (fastrpc, the camera sensor
+          # drivers, ...).
+          for f in zhiyu-firmware zhiyu-modules zhiyu-libcamera zhiyu-sensord; do
             sudo curl -fsSL "$RELEASE_URL/$f.pkg.tar.zst" -o "$T/var/tmp/rel/$f.pkg.tar.zst"
           done
           # --ask=4 lets pacman drop the distribution libcamera-ipa/-tools,
