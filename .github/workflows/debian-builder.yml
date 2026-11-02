@@ -134,6 +134,8 @@ jobs:
           APPS="qbootctl
                 wireless-regdb wpasupplicant iw rfkill alsa-ucm-conf
                 vainfo systemd-timesyncd xz-utils
+                # freedreno Vulkan (Turnip) and rusticl OpenCL for the Adreno
+                mesa-vulkan-drivers mesa-opencl-icd clinfo
                 pipewire pipewire-pulse wireplumber alsa-utils
                 libva2 libva-drm2 libdrm2 libgbm1
                 network-manager bluetooth bluez
