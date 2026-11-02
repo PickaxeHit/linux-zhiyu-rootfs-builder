@@ -199,12 +199,16 @@ jobs:
                      kde-network-meta kde-system-meta kde-utilities-meta)
               DM=plasmalogin ;;
             gnome)
-              # gnome-boxes and gnome-books still depend on the old
-              # webkit2gtk, which ALARM dropped (it ships webkitgtk-6.0 /
-              # webkit2gtk-4.1 now); without ignoring them the whole group
-              # fails to resolve.  Neither is of any use on a tablet.
-              APPS+=(gnome)
-              IGNORE="--ignore=gnome-boxes,gnome-books"
+              # Install the desktop pieces instead of the "gnome" group: the
+              # group still contains gnome-boxes and gnome-books, whose
+              # webkit2gtk dependency ALARM no longer carries, and
+              # "--ignore" does not help (pacman then asks "is in
+              # IgnorePkg, install anyway? [Y/n]" and --noconfirm answers Y).
+              APPS+=(gnome-shell gnome-session gnome-settings-daemon
+                     gnome-control-center gnome-keyring gnome-backgrounds
+                     gnome-themes-extra gnome-disk-utility gnome-system-monitor
+                     gnome-text-editor gnome-console gnome-calculator
+                     mutter nautilus xdg-desktop-portal-gnome gvfs gdm)
               DM=gdm ;;
             plasmamobile)
               # Plasma Mobile: phone-style shell (plasma-workspace, kwin,
@@ -215,7 +219,7 @@ jobs:
               DM= ;;
             *) echo "bad desktop"; exit 1 ;;
           esac
-          c pacman -S --needed --noconfirm ${IGNORE:-} "${APPS[@]}"
+          c pacman -S --needed --noconfirm "${APPS[@]}"
 
           # ---- 4. configure ----
           # locale
