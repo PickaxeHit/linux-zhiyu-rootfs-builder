@@ -204,7 +204,7 @@ jobs:
             plasmamobile)
               # Plasma Mobile: phone-style shell (plasma-workspace, kwin,
               # plasma-nano, plasma-keyboard, plasma-nm/pa come with it).
-              APPS+=(plasma-mobile)
+              APPS+=(plasma-mobile plasma-login-manager)
               DM=plasmalogin ;;
             none)
               DM= ;;

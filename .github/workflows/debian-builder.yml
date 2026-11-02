@@ -121,7 +121,7 @@ jobs:
           # ---- 2. base system ----
           ch apt-get install -y --no-install-recommends \
             sudo curl git vim zsh openssh-server kmod less man-db tzdata \
-            pciutils usbutils iproute2 iputils-ping rfkill
+            passwd pciutils usbutils iproute2 iputils-ping rfkill
 
           # ---- 3. application layer ----
           APPS="qbootctl
@@ -175,7 +175,10 @@ jobs:
           ch systemctl enable NetworkManager bluetooth ssh systemd-timesyncd
           case "$DESKTOP" in
             kde|plasmamobile)
+              # plasma-mobile does not pull a login manager, so install it
+              # here rather than relying on the desktop meta package.
               if ch apt-cache show plasma-login-manager >/dev/null 2>&1; then
+                ch apt-get install -y --no-install-recommends plasma-login-manager
                 ch systemctl enable plasmalogin
               else
                 # trixie has no plasma-login-manager; sddm is the fallback
