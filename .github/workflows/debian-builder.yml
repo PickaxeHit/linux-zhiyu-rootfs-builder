@@ -239,7 +239,9 @@ jobs:
           ch systemctl is-enabled $UNITS
           ch systemctl get-default
           ch dpkg-query -W --showformat='${Package} ${Version}\n' qbootctl qcom-va-driver mesa-libgallium 2>/dev/null || true
-          ls -l "$T/usr/lib/dri/" "$T"/usr/lib/aarch64-linux-gnu/dri/ 2>/dev/null | grep -E 'qcom|msm|v4l2'
+          # Debian's libva looks in /usr/lib/<triplet>/dri; find avoids the
+          # ls exit status of a directory that does not exist (set -o pipefail).
+          find "$T/usr/lib" -name '*_drv_video.so' 2>/dev/null | head
           ls -ld "$T/usr/share/alsa/ucm2/conf.d/sm8750" || echo "::warning::UCM profile missing in the image"
           find "$T/usr/lib/firmware" -type f | wc -l
           md5sum "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
