@@ -134,7 +134,14 @@ jobs:
                 tesseract-ocr-eng tesseract-ocr-chi-sim"
           [ "$FIRMWARE" = "true" ] && APPS="$APPS firmware-linux"
           case "$DESKTOP" in
-            kde) APPS="$APPS kde-plasma-desktop plasma-login-manager konsole" ;;
+            kde)
+              # kde-plasma-desktop is only the bare desktop: no settings
+              # module, no NetworkManager or audio applet, no brightness
+              # control.  Name the parts a usable desktop needs.
+              APPS="$APPS kde-plasma-desktop plasma-login-manager \
+                     systemsettings plasma-nm plasma-pa powerdevil kscreen \
+                     dolphin konsole"
+              ;;
             gnome) APPS="$APPS gnome gdm3" ;;
             plasmamobile) APPS="$APPS plasma-mobile" ;;
             none) ;;
