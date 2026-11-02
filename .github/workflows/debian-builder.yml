@@ -190,7 +190,11 @@ jobs:
           U="$Z/scripts/alsa-ucm2"
           [ -d "$U/ucm2" ] && U="$U/ucm2"
           sudo mkdir -p "$T/usr/share/alsa/ucm2"
+          echo "--- ucm source: $U"
+          find "$U" -maxdepth 3 | head -10
           sudo cp -a --no-preserve=ownership "$U/." "$T/usr/share/alsa/ucm2/"
+          echo "--- ucm in target:"
+          find "$T/usr/share/alsa/ucm2" -maxdepth 3 | head -10
 
           # ---- 5. VA-API driver ----
           # Use Debian's own package (sid builds an arm64 .deb that installs
@@ -236,7 +240,7 @@ jobs:
           ch systemctl get-default
           ch dpkg-query -W --showformat='${Package} ${Version}\n' qbootctl qcom-va-driver mesa-libgallium 2>/dev/null || true
           ls -l "$T/usr/lib/dri/" "$T"/usr/lib/aarch64-linux-gnu/dri/ 2>/dev/null | grep -E 'qcom|msm|v4l2'
-          ls -ld "$T/usr/share/alsa/ucm2/conf.d/sm8750"
+          ls -ld "$T/usr/share/alsa/ucm2/conf.d/sm8750" || echo "::warning::UCM profile missing in the image"
           find "$T/usr/lib/firmware" -type f | wc -l
           md5sum "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
           stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
