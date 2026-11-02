@@ -40,6 +40,9 @@ env:
   VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
   # Desktop-side remote procedure daemon for the ADSP (hexagonrpcd + units).
   # The AUR package for this is gone; build from upstream.
+  # Where the rootfs takes the board packages from (firmware + topology,
+  # libcamera, sensord); images.yml publishes them here on every build.
+  RELEASE_URL: https://github.com/PickaxeHit/linux-zhiyu/releases/latest/download
   HEXAGONRPC_URL: https://github.com/linux-msm/hexagonrpc/archive/da7a3742ab8d5273a281b70ee11f16fb2cb6a690.tar.gz
   HEXAGONRPC_SRC: hexagonrpc-da7a3742ab8d5273a281b70ee11f16fb2cb6a690
 
@@ -187,6 +190,88 @@ jobs:
 
           bc pacstrap -K /mnt/target "${PKGS[@]}"
 
+          # ---- 2b. install hexagonrpc into the new system ----
+          # hexagonrpcd is how the desktop reaches the ADSP (file service,
+          # sensors).  It is a plain meson project; install it into the target
+          # rootfs directly instead of packaging it, like the firmware blobs.
+          bc runuser -u builder -- bash -c "
+            set -e
+            cd ~
+            curl -fsSLO '$HEXAGONRPC_URL'
+            tar xf $(basename "$HEXAGONRPC_URL")
+            cd $HEXAGONRPC_SRC
+            meson setup build --buildtype=release --prefix=/usr --libdir=lib
+            ninja -C build
+            DESTDIR=\$PWD/stage meson install -C build
+          "
+          sudo cp -a "$B/home/builder/$HEXAGONRPC_SRC/stage/." "$T/"
+          # The sensor daemon talks to the ADSP through these two.
+          c systemctl enable hexagonrpcd-adsp-rootpd hexagonrpcd-adsp-sensorspd
+
+          # ---- 2c. install qmic, qrtr and sensh into the new system ----
+          # sensh is the QMI client that reads the SNS on the ADSP; it needs the
+          # qmic code generator and libqrtr at build time.  Neither is packaged
+          # on Arch any more (the AUR entries are gone), so build upstream.
+          bc runuser -u builder -- bash -c "
+            set -e
+            cd ~
+            git clone --depth 1 https://github.com/linux-msm/qmic qmic-src
+            make -C qmic-src
+            sudo make -C qmic-src install
+            sudo ldconfig
+            git clone --depth 1 https://github.com/linux-msm/qrtr qrtr-src
+            meson setup qrtr-src/build qrtr-src --buildtype=release --prefix=/usr --libdir=lib
+            ninja -C qrtr-src/build
+            sudo meson install -C qrtr-src/build
+            sudo ldconfig
+            git clone --depth 1 https://gitlab.com/flamingradian/sensh sensh-src
+            meson setup sensh-src/build sensh-src --buildtype=release --prefix=/usr
+            ninja -C sensh-src/build
+          "
+          sudo install -Dm755 "$B/home/builder/sensh-src/build/sensh" "$T/usr/local/bin/sensh"
+          sudo install -Dm755 "$B/usr/bin/qrtr-lookup" "$T/usr/bin/qrtr-lookup"
+          sudo cp -a "$B"/usr/lib/libqrtr.so* "$T/usr/lib/"
+          sudo ldconfig -r "$T"
+          # The daemons run as an unprivileged fastrpc user that owns the
+          # fastrpc device nodes and the SNS registry.
+          sudo install -Dm644 /dev/stdin "$T/usr/lib/sysusers.d/fastrpc.conf" >/dev/null <<'EOF'
+          u fastrpc - "FastRPC" /var/lib/fastrpc
+          d /var/lib/fastrpc 0755 fastrpc fastrpc
+          EOF
+          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-fastrpc.rules" >/dev/null <<'EOF'
+          KERNEL=="fastrpc-*", SUBSYSTEM=="misc", GROUP="fastrpc", MODE="0660"
+          EOF
+          # Sensor registry / config served to the ADSP (from the stock vendor
+          # image, see initramfs-src/blobs/sensors).
+          sudo install -d "$T/usr/share/qcom/sensors/registry"
+          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
+          sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
+          sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
+          c test -x /usr/bin/qbootctl
+          c test -f /usr/lib/dri/qcom_drv_video.so
+
+          # /etc/resolv.conf ships as a symlink to systemd-resolved's stub
+          # (resolved itself is part of the systemd package), but resolved
+          # is not enabled by default: the stub file never exists, nothing
+          # resolves a name, and NetworkManager hands DNS to a service that
+          # is not running.  Enable it, like a normal Arch install does
+          # whenever the stub symlink is present.
+          c systemctl enable systemd-resolved
+          # libcamera's software ISP (the Debayer used by the simple
+          # pipeline) needs a dma-buf heap.  The kernel exposes
+          # /dev/dma_heap/* as 0600 root:root, which locks the desktop user
+          # out ("Could not open any dma-buf provider"), so every GStreamer /
+          # QtMultimedia camera client fails while libcamera's raw capture
+          # still works.
+          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-dma-heap.rules" >/dev/null <<'EOF'
+          SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"
+          EOF
+          c systemctl is-enabled systemd-resolved
+
+          # makepkg defaults to zstd in the new system
+          sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
+          grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
+
           # ---- 3. application layer, inside the new system ----
           APPS=(pipewire-audio pipewire-alsa pipewire-pulse wireplumber alsa-utils
                 alsa-ucm-conf libva mesa libva-utils
@@ -260,17 +345,20 @@ jobs:
           [ -z "$DM" ] || c systemctl enable "$DM"
           c systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service || true
 
-          # firmware blobs from linux-zhiyu
-          [ -d "$Z/initramfs-src/blobs/firmware" ] || { echo "firmware dir missing"; exit 1; }
-          sudo mkdir -p "$T/usr/lib/firmware"
-          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/firmware/." "$T/usr/lib/firmware/"
-          # The AudioReach topology is built by linux-zhiyu (initramfs-src/tplg)
-          # and committed there; the card loads it from the rootfs after
-          # switch_root.  Without this the image only gets playback: no
-          # MultiMedia3 capture PCM, so UCM has no HiFi profile and PipeWire
-          # falls back to Pro Audio (no stereo sink, no microphone).
-          sudo install -Dm644 "$Z/initramfs-src/tplg/sm8750-tplg.bin" \
-            "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
+          # Firmware, libcamera and sensord come from the linux-zhiyu release:
+          # the firmware package carries the blobs *and* the AudioReach
+          # topology (without it the card only gets playback: no MultiMedia3
+          # capture PCM, so UCM has no HiFi profile and PipeWire falls back to
+          # Pro Audio), so the image no longer copies blobs/firmware itself.
+          sudo mkdir -p "$T/var/tmp/rel"
+          for f in zhiyu-firmware zhiyu-libcamera zhiyu-sensord; do
+            sudo curl -fsSL "$RELEASE_URL/$f.pkg.tar.zst" -o "$T/var/tmp/rel/$f.pkg.tar.zst"
+          done
+          # --ask=4 lets pacman drop the distribution libcamera-ipa/-tools,
+          # which our libcamera replaces.
+          c pacman -U --noconfirm --ask=4 /var/tmp/rel/*.pkg.tar.zst
+          sudo rm -rf "$T/var/tmp/rel"
+          c systemctl enable zhiyu-sensord
 
           # ALSA UCM overlay from linux-zhiyu (merged into /usr/share/alsa/ucm2)
           U="$Z/scripts/alsa-ucm2"
@@ -286,88 +374,6 @@ jobs:
           fi
           c bash -c 'pacman -U --noconfirm /var/tmp/qbootctl-*.pkg.tar.zst'
           c bash -c 'pacman -U --noconfirm /var/tmp/qcom-va-driver-*.pkg.tar.zst'
-
-          # ---- 1d. build hexagonrpc inside the bootstrap ----
-          # hexagonrpcd is how the desktop reaches the ADSP (file service,
-          # sensors).  It is a plain meson project; install it into the target
-          # rootfs directly instead of packaging it, like the firmware blobs.
-          bc runuser -u builder -- bash -c "
-            set -e
-            cd ~
-            curl -fsSLO '$HEXAGONRPC_URL'
-            tar xf $(basename "$HEXAGONRPC_URL")
-            cd $HEXAGONRPC_SRC
-            meson setup build --buildtype=release --prefix=/usr --libdir=lib
-            ninja -C build
-            DESTDIR=\$PWD/stage meson install -C build
-          "
-          sudo cp -a "$B/home/builder/$HEXAGONRPC_SRC/stage/." "$T/"
-          # The sensor daemon talks to the ADSP through these two.
-          c systemctl enable hexagonrpcd-adsp-rootpd hexagonrpcd-adsp-sensorspd
-
-          # ---- 1e. build qmic, qrtr and sensh inside the bootstrap ----
-          # sensh is the QMI client that reads the SNS on the ADSP; it needs the
-          # qmic code generator and libqrtr at build time.  Neither is packaged
-          # on Arch any more (the AUR entries are gone), so build upstream.
-          bc runuser -u builder -- bash -c "
-            set -e
-            cd ~
-            git clone --depth 1 https://github.com/linux-msm/qmic qmic-src
-            make -C qmic-src
-            sudo make -C qmic-src install
-            sudo ldconfig
-            git clone --depth 1 https://github.com/linux-msm/qrtr qrtr-src
-            meson setup qrtr-src/build qrtr-src --buildtype=release --prefix=/usr --libdir=lib
-            ninja -C qrtr-src/build
-            sudo meson install -C qrtr-src/build
-            sudo ldconfig
-            git clone --depth 1 https://gitlab.com/flamingradian/sensh sensh-src
-            meson setup sensh-src/build sensh-src --buildtype=release --prefix=/usr
-            ninja -C sensh-src/build
-          "
-          sudo install -Dm755 "$B/home/builder/sensh-src/build/sensh" "$T/usr/local/bin/sensh"
-          sudo install -Dm755 "$B/usr/bin/qrtr-lookup" "$T/usr/bin/qrtr-lookup"
-          sudo cp -a "$B"/usr/lib/libqrtr.so* "$T/usr/lib/"
-          sudo ldconfig -r "$T"
-          # The daemons run as an unprivileged fastrpc user that owns the
-          # fastrpc device nodes and the SNS registry.
-          sudo install -Dm644 /dev/stdin "$T/usr/lib/sysusers.d/fastrpc.conf" >/dev/null <<'EOF'
-          u fastrpc - "FastRPC" /var/lib/fastrpc
-          d /var/lib/fastrpc 0755 fastrpc fastrpc
-          EOF
-          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-fastrpc.rules" >/dev/null <<'EOF'
-          KERNEL=="fastrpc-*", SUBSYSTEM=="misc", GROUP="fastrpc", MODE="0660"
-          EOF
-          # Sensor registry / config served to the ADSP (from the stock vendor
-          # image, see initramfs-src/blobs/sensors).
-          sudo install -d "$T/usr/share/qcom/sensors/registry"
-          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
-          sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
-          sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
-          c test -x /usr/bin/qbootctl
-          c test -f /usr/lib/dri/qcom_drv_video.so
-
-          # /etc/resolv.conf ships as a symlink to systemd-resolved's stub
-          # (resolved itself is part of the systemd package), but resolved
-          # is not enabled by default: the stub file never exists, nothing
-          # resolves a name, and NetworkManager hands DNS to a service that
-          # is not running.  Enable it, like a normal Arch install does
-          # whenever the stub symlink is present.
-          c systemctl enable systemd-resolved
-          # libcamera's software ISP (the Debayer used by the simple
-          # pipeline) needs a dma-buf heap.  The kernel exposes
-          # /dev/dma_heap/* as 0600 root:root, which locks the desktop user
-          # out ("Could not open any dma-buf provider"), so every GStreamer /
-          # QtMultimedia camera client fails while libcamera's raw capture
-          # still works.
-          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-dma-heap.rules" >/dev/null <<'EOF'
-          SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"
-          EOF
-          c systemctl is-enabled systemd-resolved
-
-          # makepkg defaults to zstd in the new system
-          sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
-          grep -E '^(PKGEXT|COMPRESSZST)' "$T/etc/makepkg.conf"
 
           # ---- 5. default boot target ----
           # Plasma Mobile is hardcoded to the phone form factor by its own

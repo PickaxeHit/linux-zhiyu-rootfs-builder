@@ -45,6 +45,9 @@ env:
   VA_DRIVER_URL: https://github.com/radxa-pkg/qcom-va-driver/archive/0980a1decf26d34c9aa71cd0a4a0d25703a7a17f.tar.gz
   # Desktop-side remote procedure daemon for the ADSP (hexagonrpcd + units);
   # the AUR package is gone, so build upstream.
+  # Where the rootfs takes the board packages from (firmware + topology,
+  # libcamera, sensord); images.yml publishes them here on every build.
+  RELEASE_URL: https://github.com/PickaxeHit/linux-zhiyu/releases/latest/download
   HEXAGONRPC_URL: https://github.com/linux-msm/hexagonrpc/archive/da7a3742ab8d5273a281b70ee11f16fb2cb6a690.tar.gz
   HEXAGONRPC_SRC: hexagonrpc-da7a3742ab8d5273a281b70ee11f16fb2cb6a690
   VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
@@ -246,15 +249,18 @@ jobs:
           # sshd is how a headless board is reached at all
           ch systemctl enable sshd
 
-          # firmware blobs from linux-zhiyu (the board's WCN/ADSP/GPU blobs)
-          [ -d "$Z/initramfs-src/blobs/firmware" ] || { echo "firmware dir missing"; exit 1; }
-          sudo mkdir -p "$T/usr/lib/firmware"
-          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/firmware/." "$T/usr/lib/firmware/"
-          # The AudioReach topology is built by linux-zhiyu and the card loads
-          # it from the rootfs, not from the ramdisk: without it there is no
-          # MultiMedia3 capture PCM and no HiFi profile.
-          sudo install -Dm644 "$Z/initramfs-src/tplg/sm8750-tplg.bin" \
-            "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
+          # Firmware (blobs + AudioReach topology), libcamera and sensord come
+          # from the linux-zhiyu release; the topology is what gives the card
+          # its MultiMedia3 capture PCM and therefore the UCM HiFi profile.
+          sudo mkdir -p "$T/var/tmp/rel"
+          for f in zhiyu-firmware zhiyu-libcamera zhiyu-sensord; do
+            sudo curl -fsSL "$RELEASE_URL/$f.deb" -o "$T/var/tmp/rel/$f.deb"
+          done
+          # dpkg replaces the distribution libcamera packages (Declared as
+          # Replaces/Breaks in ours).
+          ch dpkg -i /var/tmp/rel/*.deb || ch apt-get -f install -y
+          sudo rm -rf "$T/var/tmp/rel"
+          ch systemctl enable zhiyu-sensord
           # ALSA UCM profile for the sm8750 card
           U="$Z/scripts/alsa-ucm2"
           [ -d "$U/ucm2" ] && U="$U/ucm2"
