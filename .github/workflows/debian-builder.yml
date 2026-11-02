@@ -133,21 +133,21 @@ jobs:
                 fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
                 tesseract-ocr-eng tesseract-ocr-chi-sim"
           [ "$FIRMWARE" = "true" ] && APPS="$APPS firmware-linux"
+
+          # The desktop itself comes from the distribution's metapackages, with
+          # their Recommends: that is how Arch's plasma-meta behaves too, and it
+          # is what brings systemsettings, plasma-nm, plasma-pa, powerdevil and
+          # kscreen.  Keeping --no-install-recommends for the rest of the list
+          # keeps the support packages predictable.
           case "$DESKTOP" in
-            kde)
-              # kde-plasma-desktop is only the bare desktop: no settings
-              # module, no NetworkManager or audio applet, no brightness
-              # control.  Name the parts a usable desktop needs.
-              APPS="$APPS kde-plasma-desktop plasma-login-manager \
-                     systemsettings plasma-nm plasma-pa powerdevil kscreen \
-                     dolphin konsole"
-              ;;
-            gnome) APPS="$APPS gnome gdm3" ;;
-            plasmamobile) APPS="$APPS plasma-mobile" ;;
-            none) ;;
+            kde) DESKTOP_PKGS="kde-standard plasma-login-manager" ;;
+            gnome) DESKTOP_PKGS="gnome gdm3" ;;
+            plasmamobile) DESKTOP_PKGS="plasma-mobile plasma-login-manager" ;;
+            none) DESKTOP_PKGS="" ;;
             *) echo "bad desktop"; exit 1 ;;
           esac
           ch apt-get install -y --no-install-recommends $APPS
+          [ -z "$DESKTOP_PKGS" ] || ch apt-get install -y $DESKTOP_PKGS
 
           # The board's userspace (freedreno/msm) wants mesa 26 or newer.
           # forky and sid already have it; trixie's main has 25.x, so pull
