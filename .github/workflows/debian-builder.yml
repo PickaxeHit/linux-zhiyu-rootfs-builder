@@ -38,6 +38,10 @@ env:
   # image has to build it from the AUR).  qcom-va-driver provides
   # /usr/lib/dri/qcom_drv_video.so; Debian has it in sid only, so it is built
   # from this pinned tarball when the release does not carry it.
+  # sid's arm64 package: needs only libva-driver-abi-1.0, libc6 >= 2.34 and
+  # libstdc++6 >= 14, and the .so itself asks for GLIBC <= 2.34 / GLIBCXX
+  # <= 3.4.30, so it installs on trixie and forky as well.
+  VA_DEB_URL: http://deb.debian.org/debian/pool/main/q/qcom-va-driver/qcom-va-driver_1.1.0-1_arm64.deb
   VA_DRIVER_URL: https://github.com/radxa-pkg/qcom-va-driver/archive/0980a1decf26d34c9aa71cd0a4a0d25703a7a17f.tar.gz
   VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
 
@@ -189,16 +193,15 @@ jobs:
           sudo cp -a --no-preserve=ownership "$U/." "$T/usr/share/alsa/ucm2/"
 
           # ---- 5. VA-API driver ----
-          # Debian unstable ships qcom-va-driver (1.1.0); trixie and forky do
-          # not, so fall back to the pinned upstream tarball and install it as
-          # a tiny .deb.  Without it /usr/lib/dri has no qcom/msm/v4l2 driver
-          # and vainfo reports no entrypoints.
+          # Use Debian's own package (sid builds an arm64 .deb that installs
+          # fine on trixie and forky) and only build the pinned upstream
+          # tarball when it cannot be fetched.
           sudo mkdir -p "$T/var/tmp/build"
-          if ch apt-cache show qcom-va-driver >/dev/null 2>&1; then
-            echo "using Debian's qcom-va-driver package"
-            ch apt-get install -y --no-install-recommends qcom-va-driver
+          if sudo curl -fsSL "$VA_DEB_URL" -o "$T/var/tmp/qcom-va-driver.deb"; then
+            echo "installing Debian's qcom-va-driver package"
+            ch apt-get install -y --no-install-recommends /var/tmp/qcom-va-driver.deb
           else
-            echo "qcom-va-driver is not packaged for $RELEASE, building it"
+            echo "cannot fetch the Debian package, building $VA_DRIVER_SRC"
             ch apt-get install -y --no-install-recommends \
               meson ninja-build pkg-config g++ libva-dev libdrm-dev \
               libgbm-dev libegl-dev libgles-dev
@@ -208,10 +211,11 @@ jobs:
               --buildtype=release --prefix=/usr --libdir=lib \
               -Dgpu_copy=auto -Dcdsp_vpp=disabled -Dvulkan_vpp=disabled
             ch meson compile -C /var/tmp/build/va-build
+            ch env DESTDIR=/var/tmp/va-root meson install \
+              -C /var/tmp/build/va-build --no-rebuild
             sudo install -d "$T/var/tmp/va-root/DEBIAN"
             printf 'Package: qcom-va-driver\nVersion: 1.1.1-1\nArchitecture: arm64\nMaintainer: rootfs-builder\nDepends: libva2, libdrm2, libgbm1, libegl1, libgles2\nDescription: VA-API backend for Qualcomm Iris stateful V4L2 M2M\n' |
               sudo tee "$T/var/tmp/va-root/DEBIAN/control" >/dev/null
-            sudo DESTDIR="$T/var/tmp/va-root" meson install -C "$T/var/tmp/build/va-build" --no-rebuild
             sudo chown -R root:root "$T/var/tmp/va-root"
             sudo dpkg-deb --build --root-owner-group "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb" >/dev/null
             ch dpkg -i /var/tmp/qcom-va-driver.deb
@@ -231,14 +235,14 @@ jobs:
           ch systemctl is-enabled $UNITS
           ch systemctl get-default
           ch dpkg-query -W --showformat='${Package} ${Version}\n' qbootctl qcom-va-driver mesa-libgallium 2>/dev/null || true
-          ls -l "$T/usr/lib/dri/" | grep -E 'qcom|msm|v4l2'
+          ls -l "$T/usr/lib/dri/" "$T"/usr/lib/aarch64-linux-gnu/dri/ 2>/dev/null | grep -E 'qcom|msm|v4l2'
           ls -ld "$T/usr/share/alsa/ucm2/conf.d/sm8750"
           find "$T/usr/lib/firmware" -type f | wc -l
           md5sum "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
           stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
 
           # ---- 8. cleanup ----
-          sudo rm -rf "$T/var/tmp/build" "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb"
+          sudo rm -rf "$T/var/tmp/build" "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb" "$T/var/tmp/va-root"
           sudo rm -f "$T/etc/resolv.conf"
           ch apt-get clean
           sudo rm -rf "$T/var/lib/apt/lists"/* "$T/var/log/apt"/* || true
