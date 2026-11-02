@@ -294,6 +294,15 @@ jobs:
           # is not running.  Enable it, like a normal Arch install does
           # whenever the stub symlink is present.
           c systemctl enable systemd-resolved
+          # libcamera's software ISP (the Debayer used by the simple
+          # pipeline) needs a dma-buf heap.  The kernel exposes
+          # /dev/dma_heap/* as 0600 root:root, which locks the desktop user
+          # out ("Could not open any dma-buf provider"), so every GStreamer /
+          # QtMultimedia camera client fails while libcamera's raw capture
+          # still works.
+          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-dma-heap.rules" >/dev/null <<'EOF'
+          SUBSYSTEM=="dma_heap", GROUP="video", MODE="0660"
+          EOF
           c systemctl is-enabled systemd-resolved
 
           # makepkg defaults to zstd in the new system
