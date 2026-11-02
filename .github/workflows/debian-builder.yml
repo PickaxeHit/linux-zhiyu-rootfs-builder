@@ -305,6 +305,39 @@ jobs:
           sudo cp -a "$T/var/tmp/build/hrpc-root/." "$T/"
           ch systemctl enable hexagonrpcd-adsp-rootpd hexagonrpcd-adsp-sensorspd
 
+          # ---- 5d. sensh (SNS client) and its build-time deps ----
+          # sensh reads the ADSP sensor service over QMI; it needs the qmic
+          # code generator and libqrtr.  None of this is packaged in Debian,
+          # so build it from upstream inside the chroot.
+          ch apt-get install -y --no-install-recommends \
+            build-essential meson ninja-build pkg-config git \
+            libprotobuf-c-dev protobuf-c-compiler
+          ch git clone --depth 1 https://github.com/linux-msm/qmic /var/tmp/qmic-src
+          ch make -C /var/tmp/qmic-src
+          ch make -C /var/tmp/qmic-src install
+          ch git clone --depth 1 https://github.com/linux-msm/qrtr /var/tmp/qrtr-src
+          ch meson setup /var/tmp/qrtr-src/build /var/tmp/qrtr-src \
+            --buildtype=release --prefix=/usr --libdir=lib
+          ch meson compile -C /var/tmp/qrtr-src/build
+          ch meson install -C /var/tmp/qrtr-src/build
+          ch git clone --depth 1 https://gitlab.com/flamingradian/sensh /var/tmp/sensh-src
+          ch meson setup /var/tmp/sensh-src/build /var/tmp/sensh-src \
+            --buildtype=release --prefix=/usr
+          ch meson compile -C /var/tmp/sensh-src/build
+          ch install -Dm755 /var/tmp/sensh-src/build/sensh /usr/local/bin/sensh
+          ch ldconfig
+          # fastrpc user + device node group, and the SNS registry/config that
+          # hexagonrpcd serves to the ADSP (from the stock vendor image).
+          sudo install -Dm644 /dev/stdin "$T/usr/lib/sysusers.d/fastrpc.conf" >/dev/null <<'EOF'
+          u fastrpc - "FastRPC" /var/lib/fastrpc
+          d /var/lib/fastrpc 0755 fastrpc fastrpc
+          EOF
+          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-fastrpc.rules" >/dev/null <<'EOF'
+          KERNEL=="fastrpc-*", SUBSYSTEM=="misc", GROUP="fastrpc", MODE="0660"
+          EOF
+          sudo install -d "$T/usr/share/qcom/sensors/registry"
+          sudo cp -a "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
+
           # ---- 6. boot slot marking ----
           # Debian's qbootctl package ships qbootctl.service, which runs
           # "qbootctl -m" once boot-complete.target is reached.

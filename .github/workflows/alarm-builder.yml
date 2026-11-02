@@ -304,6 +304,44 @@ jobs:
           sudo cp -a "$B/home/builder/$HEXAGONRPC_SRC/stage/." "$T/"
           # The sensor daemon talks to the ADSP through these two.
           c systemctl enable hexagonrpcd-adsp-rootpd hexagonrpcd-adsp-sensorspd
+
+          # ---- 1e. build qmic, qrtr and sensh inside the bootstrap ----
+          # sensh is the QMI client that reads the SNS on the ADSP; it needs the
+          # qmic code generator and libqrtr at build time.  Neither is packaged
+          # on Arch any more (the AUR entries are gone), so build upstream.
+          bc runuser -u builder -- bash -c "
+            set -e
+            cd ~
+            git clone --depth 1 https://github.com/linux-msm/qmic qmic-src
+            make -C qmic-src
+            sudo make -C qmic-src install
+            sudo ldconfig
+            git clone --depth 1 https://github.com/linux-msm/qrtr qrtr-src
+            meson setup qrtr-src/build qrtr-src --buildtype=release --prefix=/usr --libdir=lib
+            ninja -C qrtr-src/build
+            sudo meson install -C qrtr-src/build
+            sudo ldconfig
+            git clone --depth 1 https://gitlab.com/flamingradian/sensh sensh-src
+            meson setup sensh-src/build sensh-src --buildtype=release --prefix=/usr
+            ninja -C sensh-src/build
+          "
+          sudo install -Dm755 "$B/home/builder/sensh-src/build/sensh" "$T/usr/local/bin/sensh"
+          sudo install -Dm755 "$B/usr/bin/qrtr-lookup" "$T/usr/bin/qrtr-lookup"
+          sudo cp -a "$B"/usr/lib/libqrtr.so* "$T/usr/lib/"
+          sudo ldconfig -r "$T"
+          # The daemons run as an unprivileged fastrpc user that owns the
+          # fastrpc device nodes and the SNS registry.
+          sudo install -Dm644 /dev/stdin "$T/usr/lib/sysusers.d/fastrpc.conf" >/dev/null <<'EOF'
+          u fastrpc - "FastRPC" /var/lib/fastrpc
+          d /var/lib/fastrpc 0755 fastrpc fastrpc
+          EOF
+          sudo install -Dm644 /dev/stdin "$T/etc/udev/rules.d/90-fastrpc.rules" >/dev/null <<'EOF'
+          KERNEL=="fastrpc-*", SUBSYSTEM=="misc", GROUP="fastrpc", MODE="0660"
+          EOF
+          # Sensor registry / config served to the ADSP (from the stock vendor
+          # image, see initramfs-src/blobs/sensors).
+          sudo install -d "$T/usr/share/qcom/sensors/registry"
+          sudo cp -a "$Z/initramfs-src/blobs/sensors/." "$T/usr/share/qcom/sensors/"
           sudo sed -i '/^DisableSandbox$/d' "$T/etc/pacman.conf"
           sudo rm -f "$T"/var/tmp/*.pkg.tar.zst
           c test -x /usr/bin/qbootctl
