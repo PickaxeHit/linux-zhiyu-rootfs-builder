@@ -191,6 +191,9 @@ jobs:
 
           bc pacstrap -K /mnt/target "${PKGS[@]}"
 
+          # Copy the packages built in the bootstrap into the new system.
+          bc bash -c 'cp /var/tmp/pkgs/*.pkg.tar.zst /mnt/target/var/tmp/'
+
           # qbootctl and the VA-API driver were built in 1b/1c; install them
           # into the new system before anything verifies them.
           c bash -c 'pacman -U --noconfirm /var/tmp/qbootctl-*.pkg.tar.zst'
@@ -352,8 +355,6 @@ jobs:
           sudo mkdir -p "$T/usr/share/alsa/ucm2"
           sudo cp -a --no-preserve=ownership "$U/." "$T/usr/share/alsa/ucm2/"
 
-          # install the packages built in the bootstrap
-          bc bash -c 'cp /var/tmp/pkgs/*.pkg.tar.zst /mnt/target/var/tmp/'
           if c pacman -V | grep -qE 'Pacman v([7-9]|[1-9][0-9])\.'; then
             sudo sed -i '/^\[options\]/a DisableSandbox' "$T/etc/pacman.conf"
           fi
