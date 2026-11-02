@@ -310,16 +310,14 @@ jobs:
           md5sum "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
           stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
 
-          # /etc/resolv.conf ships as a symlink to systemd-resolved's stub,
-          # but resolved is not installed here, so NetworkManager refuses to
-          # write the file and nothing ever resolves a name.  Tell NM to own
-          # it as a plain file and drop the stale symlink.
-          sudo install -d "$T/etc/NetworkManager/conf.d"
-          printf '[main]\ndns=default\nrc-manager=file\n' |
-            sudo tee "$T/etc/NetworkManager/conf.d/90-dns.conf" >/dev/null
-          sudo rm -f "$T/etc/resolv.conf"
-          printf 'nameserver 223.5.5.5\nnameserver 8.8.8.8\n' |
-            sudo tee "$T/etc/resolv.conf" >/dev/null
+          # /etc/resolv.conf ships as a symlink to systemd-resolved's stub
+          # (resolved itself is part of the systemd package), but resolved
+          # is not enabled by default: the stub file never exists, nothing
+          # resolves a name, and NetworkManager hands DNS to a service that
+          # is not running.  Enable it, like a normal Arch install does
+          # whenever the stub symlink is present.
+          ch systemctl enable systemd-resolved
+          ch systemctl is-enabled systemd-resolved
 
           # ---- 8. cleanup ----
           # Unmount the chroot pseudo filesystems before measuring the tree:

@@ -287,16 +287,14 @@ jobs:
           c test -x /usr/bin/qbootctl
           c test -f /usr/lib/dri/qcom_drv_video.so
 
-          # /etc/resolv.conf ships as a symlink to systemd-resolved's stub,
-          # but resolved is not installed here, so NetworkManager refuses to
-          # write the file and nothing ever resolves a name.  Tell NM to own
-          # it as a plain file and drop the stale symlink.
-          sudo install -d "$T/etc/NetworkManager/conf.d"
-          printf '[main]\ndns=default\nrc-manager=file\n' |
-            sudo tee "$T/etc/NetworkManager/conf.d/90-dns.conf" >/dev/null
-          sudo rm -f "$T/etc/resolv.conf"
-          printf 'nameserver 223.5.5.5\nnameserver 8.8.8.8\n' |
-            sudo tee "$T/etc/resolv.conf" >/dev/null
+          # /etc/resolv.conf ships as a symlink to systemd-resolved's stub
+          # (resolved itself is part of the systemd package), but resolved
+          # is not enabled by default: the stub file never exists, nothing
+          # resolves a name, and NetworkManager hands DNS to a service that
+          # is not running.  Enable it, like a normal Arch install does
+          # whenever the stub symlink is present.
+          c systemctl enable systemd-resolved
+          c systemctl is-enabled systemd-resolved
 
           # makepkg defaults to zstd in the new system
           sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
