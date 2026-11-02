@@ -287,15 +287,16 @@ jobs:
           c test -x /usr/bin/qbootctl
           c test -f /usr/lib/dri/qcom_drv_video.so
 
-          # The systemd package leaves /etc/resolv.conf pointing at
-          # systemd-resolved's stub, which this image does not run: without a
-          # real file nothing can resolve names (pacman: Could not resolve
-          # host).
-          if [ ! -e "$T/etc/resolv.conf" ]; then
-            sudo rm -f "$T/etc/resolv.conf"
-            printf 'nameserver 223.5.5.5\nnameserver 1.1.1.1\n' |
-              sudo tee "$T/etc/resolv.conf" >/dev/null
-          fi
+          # /etc/resolv.conf ships as a symlink to systemd-resolved's stub,
+          # but resolved is not installed here, so NetworkManager refuses to
+          # write the file and nothing ever resolves a name.  Tell NM to own
+          # it as a plain file and drop the stale symlink.
+          sudo install -d "$T/etc/NetworkManager/conf.d"
+          printf '[main]\ndns=default\nrc-manager=file\n' |
+            sudo tee "$T/etc/NetworkManager/conf.d/90-dns.conf" >/dev/null
+          sudo rm -f "$T/etc/resolv.conf"
+          printf 'nameserver 223.5.5.5\nnameserver 8.8.8.8\n' |
+            sudo tee "$T/etc/resolv.conf" >/dev/null
 
           # makepkg defaults to zstd in the new system
           sudo sed -i -E "s/^#?PKGEXT=.*/PKGEXT='.pkg.tar.zst'/" "$T/etc/makepkg.conf"
