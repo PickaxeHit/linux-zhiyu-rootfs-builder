@@ -1,0 +1,252 @@
+name: Build Debian rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Debian release (trixie = 13 stable, forky = 14 testing, sid = unstable)
+        type: choice
+        options: [trixie, forky, sid]
+        default: forky
+      desktop:
+        description: Desktop environment
+        type: choice
+        options: [kde, none]
+        default: kde
+      username:
+        description: Initial username
+        type: string
+        default: user
+      password:
+        description: Initial password (overridden by repo secret ROOTFS_PASSWORD if set)
+        type: string
+        default: changeme
+      hostname:
+        description: Hostname
+        type: string
+        default: alarm
+      firmware:
+        description: Also install Debian's firmware-linux (our board blobs are always copied)
+        type: boolean
+        default: false
+
+env:
+  MIRROR: http://deb.debian.org/debian
+  # Same two helpers as the ALARM image: qbootctl marks the boot slot
+  # successful, qcom-va-driver provides /usr/lib/dri/qcom_drv_video.so.
+  QBOOTCTL_URL: https://github.com/linux-msm/qbootctl/archive/refs/tags/0.2.2.tar.gz
+  QBOOTCTL_SRC: qbootctl-0.2.2
+  VA_DRIVER_URL: https://github.com/radxa-pkg/qcom-va-driver/archive/0980a1decf26d34c9aa71cd0a4a0d25703a7a17f.tar.gz
+  VA_DRIVER_SRC: qcom-va-driver-0980a1decf26d34c9aa71cd0a4a0d25703a7a17f
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - name: Free disk space and install host tools
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/hostedtoolcache /usr/local/lib/android || true
+          sudo apt-get update
+          sudo apt-get install -y mmdebstrap debian-archive-keyring xz-utils
+          df -h /
+
+      - name: Checkout linux-zhiyu (firmware + topology + alsa-ucm2)
+        uses: actions/checkout@v4
+        with:
+          repository: PickaxeHit/linux-zhiyu
+          path: zhiyu
+          token: ${{ secrets.ZHIYU_TOKEN || github.token }}
+          lfs: true
+          sparse-checkout: |
+            initramfs-src/blobs/firmware
+            initramfs-src/tplg/sm8750-tplg.bin
+            scripts/alsa-ucm2
+
+      - name: Build rootfs
+        env:
+          RELEASE: ${{ inputs.release }}
+          DESKTOP: ${{ inputs.desktop }}
+          USERNAME: ${{ inputs.username }}
+          PASSWORD: ${{ secrets.ROOTFS_PASSWORD || inputs.password }}
+          HOST_NAME: ${{ inputs.hostname }}
+          FIRMWARE: ${{ inputs.firmware }}
+        run: |
+          set -eo pipefail
+          echo "::add-mask::$PASSWORD"
+
+          [[ "$USERNAME" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]] || { echo "invalid username"; exit 1; }
+          [[ "$HOST_NAME" =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ ]] || { echo "invalid hostname"; exit 1; }
+
+          T="$PWD/target"
+          mkdir -p "$T"
+          # Root owned from the start: the package maintainer scripts and
+          # systemd-tmpfiles both refuse to work under a non-root owned "/".
+          sudo chown root:root "$T"
+
+          # ---- 1. debootstrap ----
+          # mmdebstrap rather than debootstrap: it knows every suite without
+          # needing a script per codename and it handles usrmerge, so forky/sid
+          # work with whatever debootstrap the runner happens to ship.
+          sudo mmdebstrap --arch=arm64 --variant=apt \
+            --components=main,contrib,non-free,non-free-firmware \
+            --include=systemd,systemd-sysv,dbus,ca-certificates,locales,apt-utils,sudo \
+            "$RELEASE" "$T" "$MIRROR"
+
+          sudo mount --bind /dev "$T/dev"
+          sudo mount -t proc proc "$T/proc"
+          sudo mount -t sysfs sysfs "$T/sys"
+          sudo cp -L /etc/resolv.conf "$T/etc/resolv.conf"
+          trap 'sudo umount -R "$T/dev" "$T/proc" "$T/sys" 2>/dev/null || true' EXIT
+
+          ch() { sudo chroot "$T" /usr/bin/env -i HOME=/root TERM=dumb \
+                   PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin DEBIAN_FRONTEND=noninteractive "$@"; }
+
+          cat <<EOF | sudo tee "$T/etc/apt/sources.list" >/dev/null
+          deb $MIRROR $RELEASE main contrib non-free non-free-firmware
+          deb $MIRROR $RELEASE-updates main contrib non-free non-free-firmware
+          EOF
+          if [ "$RELEASE" != "sid" ] && [ "$RELEASE" != "forky" ]; then
+            echo "deb http://security.debian.org/debian-security $RELEASE-security main contrib non-free non-free-firmware" |
+              sudo tee -a "$T/etc/apt/sources.list" >/dev/null
+          fi
+          ch apt-get update
+
+          # ---- 2. base system ----
+          ch apt-get install -y --no-install-recommends \
+            sudo curl git vim zsh openssh-server kmod less man-db tzdata \
+            pciutils usbutils iproute2 iputils-ping rfkill
+
+          # ---- 3. application layer ----
+          APPS="pipewire pipewire-pulse wireplumber alsa-utils
+                libva2 libva-drm2 libdrm2 libgbm1
+                network-manager bluetooth bluez
+                fonts-noto-core fonts-noto-cjk fonts-noto-color-emoji
+                tesseract-ocr-eng tesseract-ocr-chi-sim"
+          [ "$FIRMWARE" = "true" ] && APPS="$APPS firmware-linux"
+          case "$DESKTOP" in
+            kde) APPS="$APPS kde-plasma-desktop sddm konsole" ;;
+            none) ;;
+            *) echo "bad desktop"; exit 1 ;;
+          esac
+          ch apt-get install -y --no-install-recommends $APPS
+
+          # build tools for the two helper packages
+          ch apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config g++ libva-dev libdrm-dev \
+            libgbm-dev libegl-dev libgles-dev
+
+          # ---- 4. configure ----
+          sudo sed -i -E 's/^# *(en_US\.UTF-8|zh_CN\.UTF-8)/\1/' "$T/etc/locale.gen"
+          ch locale-gen
+          echo 'LANG=zh_CN.UTF-8' | sudo tee "$T/etc/locale.conf" >/dev/null
+          echo "$HOST_NAME" | sudo tee "$T/etc/hostname" >/dev/null
+          printf '127.0.0.1\tlocalhost\n127.0.1.1\t%s\n' "$HOST_NAME" | sudo tee "$T/etc/hosts" >/dev/null
+          sudo ln -sf /usr/share/zoneinfo/Asia/Shanghai "$T/etc/localtime"
+
+          ch useradd -m -G sudo,audio,video,input,render -s /bin/bash "$USERNAME"
+          printf '%s:%s\n' "$USERNAME" "$PASSWORD" | ch chpasswd
+          echo '%sudo ALL=(ALL:ALL) ALL' | sudo tee "$T/etc/sudoers.d/10-sudo" >/dev/null
+          sudo chmod 440 "$T/etc/sudoers.d/10-sudo"
+          ch systemctl enable NetworkManager bluetooth ssh
+          [ "$DESKTOP" = kde ] && ch systemctl enable sddm
+          ch systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
+          ch systemctl set-default graphical.target
+
+          # firmware blobs from linux-zhiyu (the board's WCN/ADSP/GPU blobs)
+          Z="$PWD/zhiyu"
+          [ -d "$Z/initramfs-src/blobs/firmware" ] || { echo "firmware dir missing"; exit 1; }
+          sudo mkdir -p "$T/usr/lib/firmware"
+          sudo cp -a --no-preserve=ownership "$Z/initramfs-src/blobs/firmware/." "$T/usr/lib/firmware/"
+          # The AudioReach topology is built by linux-zhiyu and the card loads
+          # it from the rootfs, not from the ramdisk: without it there is no
+          # MultiMedia3 capture PCM and no HiFi profile.
+          sudo install -Dm644 "$Z/initramfs-src/tplg/sm8750-tplg.bin" \
+            "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
+          # ALSA UCM profile for the sm8750 card
+          U="$Z/scripts/alsa-ucm2"
+          [ -d "$U/ucm2" ] && U="$U/ucm2"
+          sudo mkdir -p "$T/usr/share/alsa/ucm2"
+          sudo cp -a --no-preserve=ownership "$U/." "$T/usr/share/alsa/ucm2/"
+
+          # ---- 5. helper packages, built inside the target ----
+          # qbootctl: mark the booted slot successful on every boot
+          sudo mkdir -p "$T/var/tmp/build"
+          sudo curl -fsSL "$QBOOTCTL_URL" -o "$T/var/tmp/build/qbootctl.tar.gz"
+          ch tar -xzf /var/tmp/build/qbootctl.tar.gz -C /var/tmp/build
+          ch meson setup /var/tmp/build/qbootctl-build "/var/tmp/build/$QBOOTCTL_SRC" \
+            --buildtype=release --prefix=/usr --libdir=lib
+          ch meson compile -C /var/tmp/build/qbootctl-build
+          sudo install -Dm755 "$T/var/tmp/build/qbootctl-build/qbootctl" "$T/usr/bin/qbootctl"
+
+          # qcom-va-driver: VA-API backend for the Iris video codec
+          sudo curl -fsSL "$VA_DRIVER_URL" -o "$T/var/tmp/build/va.tar.gz"
+          ch tar -xzf /var/tmp/build/va.tar.gz -C /var/tmp/build
+          ch meson setup /var/tmp/build/va-build "/var/tmp/build/$VA_DRIVER_SRC" \
+            --buildtype=release --prefix=/usr --libdir=lib \
+            -Dgpu_copy=auto -Dcdsp_vpp=disabled -Dvulkan_vpp=disabled
+          ch meson compile -C /var/tmp/build/va-build
+          sudo install -d "$T/var/tmp/va-root/DEBIAN"
+          printf 'Package: qcom-va-driver\nVersion: 1.1.1-1\nArchitecture: arm64\nMaintainer: rootfs-builder\nDepends: libva2, libdrm2, libgbm1, libegl1, libgles2\nDescription: VA-API backend for Qualcomm Iris stateful V4L2 M2M\n' |
+            sudo tee "$T/var/tmp/va-root/DEBIAN/control" >/dev/null
+          sudo DESTDIR="$T/var/tmp/va-root" meson install -C "$T/var/tmp/build/va-build" --no-rebuild
+          sudo chown -R root:root "$T/var/tmp/va-root"
+          sudo dpkg-deb --build --root-owner-group "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb" >/dev/null
+          ch dpkg -i /var/tmp/qcom-va-driver.deb
+
+          # ---- 6. boot slot marking ----
+          sudo tee "$T/etc/systemd/system/qbootctl-mark-success.service" >/dev/null <<'EOF'
+          [Unit]
+          Description=Mark current boot slot as successful (qbootctl -m)
+          After=local-fs.target
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/qbootctl -m
+          RemainAfterExit=yes
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          ch systemctl enable qbootctl-mark-success.service
+
+          # ---- 7. verify ----
+          UNITS="NetworkManager bluetooth qbootctl-mark-success"
+          [ "$DESKTOP" = kde ] && UNITS="$UNITS sddm"
+          ch systemctl is-enabled $UNITS
+          ch systemctl get-default
+          ch dpkg-query -W --showformat='${Package} ${Version}\n' qcom-va-driver mesa-libgallium 2>/dev/null || true
+          ls -l "$T/usr/lib/dri/" | grep -E 'qcom|msm|v4l2'
+          ls -ld "$T/usr/share/alsa/ucm2/conf.d/sm8750"
+          find "$T/usr/lib/firmware" -type f | wc -l
+          md5sum "$T/usr/lib/firmware/qcom/sm8750/sm8750-tplg.bin"
+          stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
+
+          # ---- 8. cleanup ----
+          sudo rm -rf "$T/var/tmp/build" "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb"
+          sudo rm -f "$T/etc/resolv.conf"
+          ch apt-get clean
+          sudo rm -rf "$T/var/lib/apt/lists"/* "$T/var/log/apt"/* || true
+          : | sudo tee "$T/etc/machine-id" >/dev/null
+          sudo du -sh "$T"
+
+      - name: Pack
+        env:
+          DESKTOP: ${{ inputs.desktop }}
+          RELEASE: ${{ inputs.release }}
+        run: |
+          OUT="debian-${RELEASE}-aarch64-${DESKTOP}-rootfs.tar.xz"
+          sudo chown root:root target
+          sudo tar --numeric-owner --xattrs --acls -C target -I 'xz -9e -T0' -cpf "$OUT" .
+          sudo chown "$USER" "$OUT"
+          sha256sum "$OUT" | tee "$OUT.sha256"
+          ls -lh "$OUT"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: debian-${{ inputs.release }}-aarch64-${{ inputs.desktop }}-rootfs
+          path: |
+            debian-*-rootfs.tar.xz
+            debian-*-rootfs.tar.xz.sha256
+          compression-level: 0
+          retention-days: 7
