@@ -248,12 +248,19 @@ jobs:
           stat -c '%u:%g %n' "$T" "$T/etc" "$T/tmp"
 
           # ---- 8. cleanup ----
-          sudo rm -rf "$T/var/tmp/build" "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb" "$T/var/tmp/va-root"
+          # Unmount the chroot pseudo filesystems before measuring the tree:
+          # du would otherwise walk /proc of the runner and return 1, which
+          # set -e turns into a failed job after everything else succeeded.
+          sudo umount -R "$T/proc" 2>/dev/null || true
+          sudo umount -R "$T/sys" 2>/dev/null || true
+          sudo umount -R "$T/dev" 2>/dev/null || true
+          trap - EXIT
+          sudo rm -rf "$T/var/tmp/build" "$T/var/tmp/va-root" "$T/var/tmp/qcom-va-driver.deb"
           sudo rm -f "$T/etc/resolv.conf"
           ch apt-get clean
           sudo rm -rf "$T/var/lib/apt/lists"/* "$T/var/log/apt"/* || true
           : | sudo tee "$T/etc/machine-id" >/dev/null
-          sudo du -sh "$T"
+          sudo du -sh "$T" 2>/dev/null || true
 
       - name: Pack
         env:
